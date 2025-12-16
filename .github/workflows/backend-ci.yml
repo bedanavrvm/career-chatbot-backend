@@ -27,14 +27,3 @@ jobs:
       - name: Run tests (if present)
         run: |
           python manage.py test || true
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    needs: build-test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Render deploy hook (optional)
-        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
-        run: |
-          curl -X POST "$RENDER_DEPLOY_HOOK"
-        env:
-          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
