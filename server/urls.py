@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
 from django.http import JsonResponse
 import os
 import base64
@@ -61,6 +61,7 @@ def secure_ping(request):
 urlpatterns = [
     path('_health/', health, name='health'),
     path('_health', health, name='health_no_slash'),
+    path('api/auth/', include('accounts.urls')),
     path('api/secure-ping/', secure_ping, name='secure_ping'),
     path('admin/', admin.site.urls),
 ]
