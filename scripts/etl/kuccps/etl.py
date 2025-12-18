@@ -133,7 +133,10 @@ def extract_programs(cfg: Config) -> None:
     if not rel:
         logger.error("No '%s' configured in inputs", key)
         return
-    src = (cfg.dataset_root / rel).resolve()
+    # Support absolute or dataset_root-relative paths
+    rel_path = Path(str(rel))
+    src = rel_path if rel_path.is_absolute() else (cfg.dataset_root / rel_path)
+    src = src.resolve()
     if not src.exists():
         logger.error("Programs PDF not found: %s", src)
         return
@@ -674,7 +677,8 @@ def transform_normalize(cfg: Config) -> None:
 
     - Fill institution_code from program code prefix
     - Classify field_name using mappings/mappings/fields_map.csv
-    - Join region/county from mappings/institutions_geo.csv
+    - Join county/region using campus-level overrides from mappings/institutions_campuses.csv
+      (when campus is set and matches a non-main campus); fall back to mappings/institutions_geo.csv
     - Write processed/institutions.csv and overwrite processed/programs.csv
     - Write processed/_unclassified_programs.csv for manual mapping
     """
@@ -762,22 +766,28 @@ def transform_normalize(cfg: Config) -> None:
                 if not fld:
                     unclassified.append([base_name, prog_code, "no_field_match"])
 
-        # region join: campus-level region only if provided, otherwise fall back to institution-level region
-        if inst_code and (not r.get("region") or not r.get("region").strip()):
+        # county/region join with campus-level override (non-main campuses) then fallback to institution-level
+        if inst_code:
             campus = (r.get("campus") or "").strip().upper()
-            # Try campus-level mapping first
             campus_geo = None
             if campus and inst_code in inst_campuses:
                 campus_geo = inst_campuses[inst_code].get(campus)
-            campus_region = (campus_geo.get("region", "").strip() if campus_geo else "")
-            if campus_region:
-                r["region"] = campus_region
-            else:
-                # Fallback to code-level geo
-                code_geo = inst_geo.get(inst_code)
-                if code_geo:
-                    r["region"] = code_geo.get("region", "")
-            # county remains institutions-only
+            # County
+            if not (r.get("county") or "").strip():
+                if campus_geo and (campus_geo.get("county") or "").strip():
+                    r["county"] = campus_geo.get("county", "")
+                else:
+                    code_geo = inst_geo.get(inst_code)
+                    if code_geo:
+                        r["county"] = code_geo.get("county", "")
+            # Region
+            if not (r.get("region") or "").strip():
+                if campus_geo and (campus_geo.get("region") or "").strip():
+                    r["region"] = campus_geo.get("region", "")
+                else:
+                    code_geo = inst_geo.get(inst_code)
+                    if code_geo:
+                        r["region"] = code_geo.get("region", "")
 
         # collect institutions
         name = (r.get("institution_name") or "").strip()
@@ -1001,7 +1011,25 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> None:
     """
     setup_django()
     from django.db import transaction
-    from catalog.models import Institution, Field, Subject, Program, YearlyCutoff, NormalizationRule, ProgramLevel
+    from catalog.models import (
+        Institution,
+        Field,
+        Subject,
+        Program,
+        YearlyCutoff,
+        NormalizationRule,
+        ProgramLevel,
+        InstitutionCampus,
+        ProgramOfferingAggregate,
+        ProgramOfferingBroadAggregate,
+        DedupCandidateGroup,
+        DedupSummary,
+        CodeCorrectionAudit,
+        ETLRun,
+        DQReportEntry,
+        ClusterSubjectRule,
+        ProgramRequirementNormalized,
+    )
 
     @transaction.atomic
     def _load():
@@ -1064,36 +1092,54 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> None:
             prog_path = cfg.processed_dir / "programs.csv"
         if prog_path.exists():
             with open(prog_path, encoding="utf-8") as f:
-                sample = f.read(4096)
+                # Loader notes:
+                # - programs.csv is emitted as TSV by transform_normalize to avoid heavy quoting in JSON columns
+                # - csv.Sniffer can mis-detect comma when subject_requirements_json has many commas
+                # - Prefer explicit tab delimiter when the header contains tabs; otherwise fall back to Sniffer, then TSV
+                header_line = f.readline()
+                rest = f.read(8192)
                 f.seek(0)
                 try:
-                    dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                    if "\t" in header_line:
+                        reader = csv.DictReader(f, delimiter="\t")
+                    else:
+                        sample = header_line + rest
+                        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                        reader = csv.DictReader(f, dialect=dialect)
                 except Exception:
-                    dialect = csv.excel_tab if "\t" in sample else csv.excel
-                reader = csv.DictReader(f, dialect=dialect)
+                    f.seek(0)
+                    reader = csv.DictReader(f, delimiter="\t")
                 for row in reader:
                     inst_code = row.get("institution_code", "").strip()
                     field_name = row.get("field_name", "").strip()
+                    # Map institution_code -> Institution FK; skip unsafe rows instead of violating NOT NULL
+                    if not inst_code:
+                        logger.warning("Program row skipped (missing institution_code): %s", row)
+                        continue
                     inst = Institution.objects.filter(code=inst_code).first()
-                    fld = Field.objects.filter(name=field_name).first()
+                    if not inst:
+                        logger.warning("Program row skipped (institution not found for code=%s)", inst_code)
+                        continue
+                    fld = Field.objects.filter(name=field_name).first() if field_name else None
                     level = row.get("level", "").strip().lower() or ProgramLevel.BACHELOR
-                    # Basic sanitize for normalized_name fallback
-                    normalized_name = row.get("normalized_name") or row.get("name") or ""
-                    normalized_name = normalized_name.strip()
+                    normalized_name = (row.get("normalized_name") or row.get("name") or "").strip()
+                    if not normalized_name:
+                        logger.warning("Program row skipped (missing normalized/name): %s", row)
+                        continue
                     Program.objects.get_or_create(
                         institution=inst,
                         normalized_name=normalized_name,
                         level=level,
-                        campus=row.get("campus", "").strip(),
+                        campus=(row.get("campus") or "").strip(),
                         defaults={
                             "field": fld,
                             "code": (row.get("program_code") or row.get("code") or "").strip(),
-                            "name": row.get("name", "").strip(),
-                            "region": row.get("region", "").strip(),
+                            "name": (row.get("name") or "").strip(),
+                            "region": (row.get("region") or "").strip(),
                             "duration_years": (row.get("duration_years") or None),
-                            "award": row.get("award", "").strip(),
-                            "mode": row.get("mode", "").strip(),
-                            "subject_requirements": _safe_json(row.get("subject_requirements_json", "{}")),
+                            "award": (row.get("award") or "").strip(),
+                            "mode": (row.get("mode") or "").strip(),
+                            "subject_requirements": _safe_json(row.get("subject_requirements_json") or "{}"),
                         },
                     )
         # Cutoffs
@@ -1144,6 +1190,200 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> None:
                         source_value=row.get("source_value", "").strip(),
                         defaults={"normalized_value": row.get("normalized_value", "").strip()},
                     )
+
+        # Institution campuses (from mappings/institutions_campuses.csv)
+        try:
+            campuses_path = MAPPINGS_DIR / "institutions_campuses.csv"
+            if campuses_path.exists():
+                with open(campuses_path, encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        code = (row.get("institution_code") or "").strip()
+                        campus = (row.get("campus") or "").strip()
+                        if not code or not campus:
+                            continue
+                        inst = Institution.objects.filter(code=code).first()
+                        if not inst:
+                            continue
+                        InstitutionCampus.objects.update_or_create(
+                            institution=inst,
+                            campus=campus,
+                            defaults={
+                                "town": (row.get("town") or "").strip(),
+                                "county": (row.get("county") or "").strip(),
+                                "region": (row.get("region") or "").strip(),
+                            },
+                        )
+        except Exception:
+            logger.exception("Failed loading InstitutionCampus")
+
+        # Program offerings aggregates (processed/program_offerings.csv)
+        po_path = cfg.processed_dir / "program_offerings.csv"
+        if po_path.exists():
+            with open(po_path, encoding="utf-8") as f:
+                # TSV-aware
+                header = f.readline()
+                rest = f.read(4096)
+                f.seek(0)
+                try:
+                    if "\t" in header:
+                        reader = csv.DictReader(f, delimiter="\t")
+                    else:
+                        sample = header + rest
+                        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                        reader = csv.DictReader(f, dialect=dialect)
+                except Exception:
+                    f.seek(0)
+                    reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    ProgramOfferingAggregate.objects.update_or_create(
+                        program_normalized_name=(row.get("program_normalized_name") or "").strip(),
+                        course_suffix=(row.get("course_suffix") or "").strip(),
+                        defaults={
+                            "offerings_count": int(row.get("offerings_count") or 0),
+                        },
+                    )
+
+        # Program offerings broad aggregates (processed/program_offerings_broad.csv)
+        pob_path = cfg.processed_dir / "program_offerings_broad.csv"
+        if pob_path.exists():
+            with open(pob_path, encoding="utf-8") as f:
+                # TSV-aware
+                header = f.readline()
+                rest = f.read(4096)
+                f.seek(0)
+                try:
+                    if "\t" in header:
+                        reader = csv.DictReader(f, delimiter="\t")
+                    else:
+                        sample = header + rest
+                        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                        reader = csv.DictReader(f, dialect=dialect)
+                except Exception:
+                    f.seek(0)
+                    reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    ProgramOfferingBroadAggregate.objects.update_or_create(
+                        program_normalized_name=(row.get("program_normalized_name") or "").strip(),
+                        defaults={
+                            "offerings_count": int(row.get("offerings_count") or 0),
+                        },
+                    )
+
+        # Dedup reports (processed/dedup_candidates.csv and dedup_summary.csv)
+        cand_path = cfg.processed_dir / "dedup_candidates.csv"
+        if cand_path.exists():
+            with open(cand_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    code = (row.get("institution_code") or "").strip()
+                    inst = Institution.objects.filter(code=code).first() if code else None
+                    program_codes = [c for c in (row.get("program_codes") or "").split("|") if c]
+                    name_variants = [n for n in (row.get("name_variants") or "").split("|") if n]
+                    DedupCandidateGroup.objects.update_or_create(
+                        institution=inst,
+                        normalized_name=(row.get("normalized_name") or "").strip(),
+                        level=((row.get("level") or "").strip().lower() or ProgramLevel.BACHELOR),
+                        campus=(row.get("campus") or "").strip(),
+                        defaults={
+                            "institution_code": code,
+                            "institution_name": (row.get("institution_name") or "").strip(),
+                            "rows_count": int(row.get("rows_count") or 0),
+                            "program_codes": program_codes,
+                            "name_variants": name_variants,
+                            "suggested_master_program_code": (row.get("suggested_master_program_code") or "").strip(),
+                        },
+                    )
+        summ_path = cfg.processed_dir / "dedup_summary.csv"
+        if summ_path.exists():
+            with open(summ_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    code = (row.get("institution_code") or "").strip()
+                    inst = Institution.objects.filter(code=code).first() if code else None
+                    DedupSummary.objects.update_or_create(
+                        institution=inst,
+                        defaults={
+                            "institution_code": code,
+                            "institution_name": (row.get("institution_name") or "").strip(),
+                            "duplicate_groups": int(row.get("duplicate_groups") or 0),
+                            "duplicate_rows": int(row.get("duplicate_rows") or 0),
+                        },
+                    )
+
+        # Code corrections audit (processed/_code_corrections.csv)
+        corr_path = cfg.processed_dir / "_code_corrections.csv"
+        if corr_path.exists():
+            with open(corr_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    before = (row.get("original_code") or "").strip()
+                    after = (row.get("corrected_code") or "").strip()
+                    reason = (row.get("reason") or "").strip()
+                    inst_code = _derive_institution_code(before) if before else ""
+                    CodeCorrectionAudit.objects.update_or_create(
+                        program_code_before=before,
+                        program_code_after=after,
+                        correction_type=reason,
+                        defaults={
+                            "institution_code": inst_code,
+                            "group_key": (row.get("program_header") or "").strip(),
+                            "reason": reason,
+                            "metadata": {"source_index": (row.get("source_index") or "").strip(), "institution_name": (row.get("institution_name") or "").strip()},
+                        },
+                    )
+
+        # DQ report (processed/dq_report.csv)
+        dq_path = cfg.processed_dir / "dq_report.csv"
+        if dq_path.exists():
+            metrics = {}
+            with open(dq_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                for r in rows:
+                    metrics[r.get("metric", "")] = r.get("value")
+            run = ETLRun.objects.create(action="dq-report", stats=metrics)
+            for r in rows:
+                DQReportEntry.objects.create(
+                    run=run,
+                    metric_name=(r.get("metric") or "").strip(),
+                    value=(r.get("value") or "").strip(),
+                    scope=(r.get("scope") or "").strip(),
+                    extra={k: v for k, v in r.items() if k not in {"metric", "value", "scope"}},
+                )
+
+        # Cluster subject rules (mappings/cluster_subjects.csv)
+        try:
+            csr_path = MAPPINGS_DIR / "cluster_subjects.csv"
+            if csr_path.exists():
+                with open(csr_path, encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        prog_pat = (row.get("program_pattern") or "").strip()
+                        if not prog_pat:
+                            continue
+                        ClusterSubjectRule.objects.update_or_create(
+                            program_pattern=prog_pat,
+                            defaults={"subjects_grammar": (row.get("subjects") or "").strip()},
+                        )
+        except Exception:
+            logger.exception("Failed loading ClusterSubjectRule")
+
+        # Optional: Normalize program requirements into a relational helper table
+        for prog in Program.objects.all().only("id", "subject_requirements"):
+            try:
+                req = prog.subject_requirements or {}
+                ProgramRequirementNormalized.objects.update_or_create(
+                    program=prog,
+                    defaults={
+                        "required": req.get("required", []),
+                        "groups": req.get("groups", []),
+                        "notes": req.get("notes", ""),
+                    },
+                )
+            except Exception:
+                # Skip malformed JSON rows gracefully
+                continue
 
     if dry_run:
         logger.info("load: DRY RUN - skipping DB writes")

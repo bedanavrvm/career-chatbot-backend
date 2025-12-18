@@ -1,5 +1,23 @@
 from django.contrib import admin
-from .models import Institution, Field, Subject, Program, YearlyCutoff, NormalizationRule, DedupMatch
+from .models import (
+    Institution,
+    Field,
+    Subject,
+    Program,
+    YearlyCutoff,
+    NormalizationRule,
+    DedupMatch,
+    InstitutionCampus,
+    ProgramOfferingAggregate,
+    ProgramOfferingBroadAggregate,
+    DedupCandidateGroup,
+    DedupSummary,
+    CodeCorrectionAudit,
+    ETLRun,
+    DQReportEntry,
+    ClusterSubjectRule,
+    ProgramRequirementNormalized,
+)
 
 
 @admin.register(Institution)
@@ -46,3 +64,67 @@ class NormalizationRuleAdmin(admin.ModelAdmin):
 class DedupMatchAdmin(admin.ModelAdmin):
     list_display = ("master_program", "duplicate_program", "reason", "created_at")
     search_fields = ("master_program__normalized_name", "duplicate_program__normalized_name")
+
+
+@admin.register(InstitutionCampus)
+class InstitutionCampusAdmin(admin.ModelAdmin):
+    list_display = ("institution", "campus", "region", "county", "town")
+    search_fields = ("institution__code", "institution__name", "campus", "region", "county", "town")
+    list_filter = ("region", "county")
+
+
+@admin.register(ProgramOfferingAggregate)
+class ProgramOfferingAggregateAdmin(admin.ModelAdmin):
+    list_display = ("program_normalized_name", "course_suffix", "offerings_count")
+    search_fields = ("program_normalized_name", "course_suffix")
+
+
+@admin.register(ProgramOfferingBroadAggregate)
+class ProgramOfferingBroadAggregateAdmin(admin.ModelAdmin):
+    list_display = ("program_normalized_name", "offerings_count")
+    search_fields = ("program_normalized_name",)
+
+
+@admin.register(DedupCandidateGroup)
+class DedupCandidateGroupAdmin(admin.ModelAdmin):
+    list_display = ("institution", "institution_code", "normalized_name", "level", "campus", "rows_count")
+    search_fields = ("institution_code", "institution_name", "normalized_name", "level", "campus")
+    list_filter = ("level", "campus")
+
+
+@admin.register(DedupSummary)
+class DedupSummaryAdmin(admin.ModelAdmin):
+    list_display = ("institution", "institution_code", "duplicate_groups", "duplicate_rows")
+    search_fields = ("institution_code", "institution_name")
+
+
+@admin.register(CodeCorrectionAudit)
+class CodeCorrectionAuditAdmin(admin.ModelAdmin):
+    list_display = ("program_code_before", "program_code_after", "correction_type", "institution_code")
+    search_fields = ("program_code_before", "program_code_after", "correction_type", "institution_code", "group_key")
+    list_filter = ("correction_type",)
+
+
+@admin.register(ETLRun)
+class ETLRunAdmin(admin.ModelAdmin):
+    list_display = ("action", "created_at", "started_at", "finished_at")
+    search_fields = ("action",)
+    list_filter = ("action",)
+
+
+@admin.register(DQReportEntry)
+class DQReportEntryAdmin(admin.ModelAdmin):
+    list_display = ("metric_name", "value", "scope", "run")
+    search_fields = ("metric_name", "scope")
+
+
+@admin.register(ClusterSubjectRule)
+class ClusterSubjectRuleAdmin(admin.ModelAdmin):
+    list_display = ("program_pattern",)
+    search_fields = ("program_pattern",)
+
+
+@admin.register(ProgramRequirementNormalized)
+class ProgramRequirementNormalizedAdmin(admin.ModelAdmin):
+    list_display = ("program",)
+    search_fields = ("program__normalized_name",)

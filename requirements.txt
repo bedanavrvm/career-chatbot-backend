@@ -30,6 +30,9 @@ hyperframe==6.1.0
 idna==3.11
 msgpack==1.1.2
 packaging==25.0
+pdfminer.six==20251107
+pdfplumber==0.11.8
+pillow==12.0.0
 proto-plus==1.26.1
 protobuf==6.33.2
 psycopg2-binary==2.9.11
@@ -37,10 +40,11 @@ pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.23
 PyJWT==2.10.1
+pypdfium2==5.2.0
 python-dotenv==1.2.1
+PyYAML==6.0.2
 requests==2.32.5
 rsa==4.9.1
 sqlparse==0.5.4
 typing_extensions==4.15.0
 urllib3==2.6.2
-PyYAML==6.0.2

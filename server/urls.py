@@ -16,9 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponse
 from django.shortcuts import render
 from django.contrib.admin.views.decorators import staff_member_required
+from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect, csrf_exempt
+from django.conf import settings
 import os
 import base64
 import json
@@ -104,6 +106,53 @@ def _fields_path() -> Path:
     return _processed_dir() / "fields.csv"
 
 
+# ---- Simple in-process CSV cache and ETag helpers (dev-friendly) ----
+# Cache keyed by absolute path; values: {"sig": (mtime, size), "rows": [...]}.
+_CSV_CACHE: dict[str, dict] = {}
+
+
+def _file_sig(fp: Path) -> tuple:
+    try:
+        st = fp.stat()
+        return (int(st.st_mtime), int(st.st_size))
+    except Exception:
+        return (0, 0)
+
+
+def _etag_for(sig: tuple) -> str:
+    # Weak ETag using mtime and size; stable across reads until file changes
+    return f'W/"{sig[0]}-{sig[1]}"'
+
+
+def _read_programs_cached() -> tuple[list[dict], str]:
+    fp = _programs_path()
+    sig = _file_sig(fp)
+    key = str(fp.resolve())
+    cached = _CSV_CACHE.get(key)
+    if not cached or cached.get("sig") != sig:
+        rows: list[dict] = []
+        with open(fp, encoding="utf-8") as f:
+            rdr = _detect_reader(f)
+            rows = [r for r in rdr]
+        _CSV_CACHE[key] = {"sig": sig, "rows": rows}
+    etag = _etag_for(sig)
+    return _CSV_CACHE[key]["rows"], etag
+
+
+def _read_csv_cached(fp: Path) -> tuple[list[dict], str]:
+    sig = _file_sig(fp)
+    key = str(fp.resolve())
+    cached = _CSV_CACHE.get(key)
+    if not cached or cached.get("sig") != sig:
+        rows: list[dict] = []
+        if fp.exists():
+            with open(fp, encoding="utf-8") as f:
+                rows = [r for r in csv.DictReader(f)]
+        _CSV_CACHE[key] = {"sig": sig, "rows": rows}
+    etag = _etag_for(sig)
+    return _CSV_CACHE[key]["rows"], etag
+
+
 def api_programs(request):
     """GET /api/etl/programs
     Query params: q, field, level, region, page, page_size
@@ -118,38 +167,44 @@ def api_programs(request):
         level = (request.GET.get("level") or "").strip().lower()
         region = (request.GET.get("region") or "").strip().lower()
         page = max(1, int(request.GET.get("page", 1)))
-        page_size = max(1, min(100, int(request.GET.get("page_size", 20))))
+        page_size = max(1, min(50, int(request.GET.get("page_size", 20))))
+
+        all_rows, etag = _read_programs_cached()
+        # Conditional GET via ETag
+        inm = request.META.get("HTTP_IF_NONE_MATCH")
+        if inm and inm == etag:
+            return HttpResponse(status=304)
 
         rows = []
-        with open(fp, encoding="utf-8") as f:
-            reader = _detect_reader(f)
-            for row in reader:
-                name = (row.get("name") or "").lower()
-                norm = (row.get("normalized_name") or "").lower()
-                inst = (row.get("institution_name") or "").lower()
-                field_name = (row.get("field_name") or "").lower()
-                level_val = (row.get("level") or "").lower()
-                region_val = (row.get("region") or "").lower()
-                if q and not (q in name or q in norm or q in inst):
-                    continue
-                if field and field != field_name:
-                    continue
-                if level and level != level_val:
-                    continue
-                if region and region != region_val:
-                    continue
-                rows.append(row)
+        for row in all_rows:
+            name = (row.get("name") or "").lower()
+            norm = (row.get("normalized_name") or "").lower()
+            inst = (row.get("institution_name") or "").lower()
+            field_name = (row.get("field_name") or "").lower()
+            level_val = (row.get("level") or "").lower()
+            region_val = (row.get("region") or "").lower()
+            if q and not (q in name or q in norm or q in inst):
+                continue
+            if field and field != field_name:
+                continue
+            if level and level != level_val:
+                continue
+            if region and region != region_val:
+                continue
+            rows.append(row)
 
         total = len(rows)
         start = (page - 1) * page_size
         end = start + page_size
         items = rows[start:end]
-        return JsonResponse({
+        resp = JsonResponse({
             "count": total,
             "page": page,
             "page_size": page_size,
             "results": items,
         })
+        resp["ETag"] = etag
+        return resp
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 
@@ -214,22 +269,26 @@ def api_institutions(request):
         q = (request.GET.get("q") or "").strip().lower()
         region = (request.GET.get("region") or "").strip().lower()
         county = (request.GET.get("county") or "").strip().lower()
+        rows_all, etag = _read_csv_cached(fp)
+        inm = request.META.get("HTTP_IF_NONE_MATCH")
+        if inm and inm == etag:
+            return HttpResponse(status=304)
         rows = []
-        with open(fp, encoding="utf-8") as f:
-            rdr = csv.DictReader(f)
-            for row in rdr:
-                name = (row.get("name") or "").lower()
-                alias = (row.get("alias") or "").lower()
-                reg = (row.get("region") or "").lower()
-                cty = (row.get("county") or "").lower()
-                if q and not (q in name or q in alias):
-                    continue
-                if region and region != reg:
-                    continue
-                if county and county != cty:
-                    continue
-                rows.append(row)
-        return JsonResponse({"count": len(rows), "results": rows})
+        for row in rows_all:
+            name = (row.get("name") or "").lower()
+            alias = (row.get("alias") or "").lower()
+            reg = (row.get("region") or "").lower()
+            cty = (row.get("county") or "").lower()
+            if q and not (q in name or q in alias):
+                continue
+            if region and region != reg:
+                continue
+            if county and county != cty:
+                continue
+            rows.append(row)
+        resp = JsonResponse({"count": len(rows), "results": rows})
+        resp["ETag"] = etag
+        return resp
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 
@@ -245,18 +304,22 @@ def api_fields(request):
             return JsonResponse({"detail": f"Fields file not found at {fp}"}, status=500)
         q = (request.GET.get("q") or "").strip().lower()
         parent = (request.GET.get("parent") or "").strip().lower()
+        rows_all, etag = _read_csv_cached(fp)
+        inm = request.META.get("HTTP_IF_NONE_MATCH")
+        if inm and inm == etag:
+            return HttpResponse(status=304)
         rows = []
-        with open(fp, encoding="utf-8") as f:
-            rdr = csv.DictReader(f)
-            for row in rdr:
-                name = (row.get("name") or "").lower()
-                parent_val = (row.get("parent") or "").lower()
-                if q and q not in name:
-                    continue
-                if parent and parent != parent_val:
-                    continue
-                rows.append(row)
-        return JsonResponse({"count": len(rows), "results": rows})
+        for row in rows_all:
+            name = (row.get("name") or "").lower()
+            parent_val = (row.get("parent") or "").lower()
+            if q and q not in name:
+                continue
+            if parent and parent != parent_val:
+                continue
+            rows.append(row)
+        resp = JsonResponse({"count": len(rows), "results": rows})
+        resp["ETag"] = etag
+        return resp
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 
@@ -271,54 +334,55 @@ def api_search(request):
             return JsonResponse({"detail": "q is required"}, status=400)
         # Programs
         programs = []
-        pfp = _programs_path()
-        if pfp.exists():
-            with open(pfp, encoding="utf-8") as f:
-                rdr = _detect_reader(f)
-                for row in rdr:
-                    name = (row.get("name") or "").lower()
-                    norm = (row.get("normalized_name") or "").lower()
-                    inst = (row.get("institution_name") or "").lower()
-                    if q in name or q in norm or q in inst:
-                        programs.append({
-                            "program_code": row.get("program_code") or row.get("code"),
-                            "name": row.get("name"),
-                            "normalized_name": row.get("normalized_name"),
-                            "institution_name": row.get("institution_name"),
-                            "field_name": row.get("field_name"),
-                            "level": row.get("level"),
-                        })
-                        if len(programs) >= 10:
-                            break
+        prog_rows, etag_p = _read_programs_cached()
+        for row in prog_rows:
+            name = (row.get("name") or "").lower()
+            norm = (row.get("normalized_name") or "").lower()
+            inst = (row.get("institution_name") or "").lower()
+            if q in name or q in norm or q in inst:
+                programs.append({
+                    "program_code": row.get("program_code") or row.get("code"),
+                    "name": row.get("name"),
+                    "normalized_name": row.get("normalized_name"),
+                    "institution_name": row.get("institution_name"),
+                    "field_name": row.get("field_name"),
+                    "level": row.get("level"),
+                })
+                if len(programs) >= 10:
+                    break
         # Institutions
         institutions = []
-        if _institutions_path().exists():
-            with open(_institutions_path(), encoding="utf-8") as f:
-                rdr = csv.DictReader(f)
-                for row in rdr:
-                    name = (row.get("name") or "").lower()
-                    alias = (row.get("alias") or "").lower()
-                    if q in name or q in alias:
-                        institutions.append(row)
-                        if len(institutions) >= 10:
-                            break
+        inst_rows, etag_i = _read_csv_cached(_institutions_path())
+        for row in inst_rows:
+            name = (row.get("name") or "").lower()
+            alias = (row.get("alias") or "").lower()
+            if q in name or q in alias:
+                institutions.append(row)
+                if len(institutions) >= 10:
+                    break
         # Fields
         fields = []
-        if _fields_path().exists():
-            with open(_fields_path(), encoding="utf-8") as f:
-                rdr = csv.DictReader(f)
-                for row in rdr:
-                    name = (row.get("name") or "").lower()
-                    if q in name:
-                        fields.append(row)
-                        if len(fields) >= 10:
-                            break
-        return JsonResponse({"programs": programs, "institutions": institutions, "fields": fields})
+        field_rows, etag_f = _read_csv_cached(_fields_path())
+        for row in field_rows:
+            name = (row.get("name") or "").lower()
+            if q in name:
+                fields.append(row)
+                if len(fields) >= 10:
+                    break
+        etag = f'{etag_p},{etag_i},{etag_f}'
+        inm = request.META.get("HTTP_IF_NONE_MATCH")
+        if inm and inm == etag:
+            return HttpResponse(status=304)
+        resp = JsonResponse({"programs": programs, "institutions": institutions, "fields": fields})
+        resp["ETag"] = etag
+        return resp
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 
 
 @staff_member_required
+@ensure_csrf_cookie
+@csrf_protect
 def admin_etl_upload(request):
     """POST /admin/etl/upload (multipart/form-data)
     Saves uploaded file into KUCCPS raw/uploads and returns stored path.
@@ -346,32 +410,307 @@ def admin_etl_upload(request):
 
 
 @staff_member_required
+@ensure_csrf_cookie
+@csrf_protect
 def admin_etl_process(request):
     """POST /admin/etl/process
     Optional body: {"action": "transform-normalize"}
     Invokes transform-normalize to regenerate processed CSVs using local config.
     """
     if request.method == "GET":
-        return render(request, "admin/etl_process.html", {})
+        actions = [
+            "extract",
+            "extract-programs",
+            "transform",
+            "transform-programs",
+            "transform-normalize",
+            "dedup-programs",
+            "dq-report",
+            "load",
+            "all",
+        ]
+        return render(request, "admin/etl_process.html", {"actions": actions})
     try:
         # Allow both JSON body and form submission
-        action = "transform-normalize"
-        if request.content_type and "application/json" in request.content_type:
-            body = json.loads(request.body.decode("utf-8") or "{}")
-            action = (body.get("action") or action).strip()
-        else:
-            action = (request.POST.get("action") or action).strip()
+        action = (request.POST.get("action") or "transform-normalize").strip()
+        config_path = (request.POST.get("config") or "").strip()
+        inplace = bool(request.POST.get("inplace"))
+        dry_run = bool(request.POST.get("dry_run"))
+
         etl_dir = Path(__file__).resolve().parent.parent / "scripts" / "etl" / "kuccps"
         sys.path.append(str(etl_dir))
-        from etl import Config, transform_normalize  # type: ignore
-        cfg = Config(dataset_year=2024, dataset_root=etl_dir, inputs={}, raw_dir=etl_dir / "raw", processed_dir=etl_dir / "processed")
+        from etl import (
+            Config,
+            copy_inputs,
+            bootstrap_csvs,
+            extract_programs,
+            transform_programs,
+            transform_normalize,
+            dedup_programs,
+            dq_report,
+            load_csvs,
+        )  # type: ignore
+
+        # Resolve config
+        cfg = None
+        msg = []
+        etl_stats = {}
+        if config_path:
+            # Support absolute paths or paths relative to backend/ root
+            backend_dir = Path(__file__).resolve().parent.parent
+            p = Path(config_path)
+            if not p.is_absolute():
+                p = (backend_dir / p).resolve()
+            try:
+                cfg = Config.from_yaml(p)
+                msg.append(f"Using config: {p}")
+            except Exception as e:
+                return render(request, "admin/etl_process.html", {"error": f"Invalid config: {e}", "actions": [
+                    "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+                ]})
+        else:
+            # Default to local KUCCPS directories
+            cfg = Config(dataset_year=2024, dataset_root=etl_dir, inputs={}, raw_dir=etl_dir / "raw", processed_dir=etl_dir / "processed")
+
         ran = False
-        if action == "transform-normalize":
+        load_summary = None
+        if action == "extract":
+            copy_inputs(cfg)
+            ran = True
+        elif action == "extract-programs":
+            # If no programs_pdf configured, try to discover latest uploaded PDF under raw/uploads
+            if not cfg.inputs.get("programs_pdf"):
+                uploads = (etl_dir / "raw" / "uploads")
+                if uploads.exists():
+                    pdfs = sorted(uploads.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if pdfs:
+                        latest = pdfs[0]
+                        try:
+                            rel = latest.resolve().relative_to(cfg.dataset_root)
+                        except Exception:
+                            # fallback to path relative to etl_dir
+                            rel = latest.resolve().relative_to(etl_dir)
+                        cfg.inputs["programs_pdf"] = str(rel)
+                        msg.append(f"Detected uploaded PDF: {latest.name}")
+                if not cfg.inputs.get("programs_pdf"):
+                    return render(request, "admin/etl_process.html", {
+                        "error": "No programs PDF configured or found under raw/uploads. Upload a PDF first on the Upload page.",
+                        "actions": [
+                            "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+                        ],
+                        "messages": msg,
+                    })
+            # Hard dependency check for pdfplumber
+            try:
+                import pdfplumber  # noqa: F401
+            except Exception as dep_err:
+                return render(request, "admin/etl_process.html", {
+                    "error": f"Missing dependency: pdfplumber not installed ({dep_err}). Please install it in venv.",
+                    "actions": [
+                        "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+                    ],
+                    "messages": msg,
+                })
+            extract_programs(cfg)
+            ran = True
+            # Stats: raw artifacts
+            text_dir = cfg.raw_dir / "programs_text"
+            tables_dir = cfg.raw_dir / "programs_tables"
+            uploads = cfg.raw_dir / "uploads"
+            pdf_count = len(list(cfg.raw_dir.glob("*.pdf"))) + (len(list(uploads.glob("*.pdf"))) if uploads.exists() else 0)
+            etl_stats.update({
+                "raw_dir": str(cfg.raw_dir),
+                "programs_pdf_count": pdf_count,
+                "programs_text_pages": len(list(text_dir.glob("*.txt"))) if text_dir.exists() else 0,
+                "programs_tables": len(list(tables_dir.glob("*.csv"))) if tables_dir.exists() else 0,
+            })
+        elif action == "transform":
+            bootstrap_csvs(cfg)
+            ran = True
+            # Stats: existence of templates
+            for fname in ("programs.csv","yearly_cutoffs.csv","institutions.csv","fields.csv"):
+                fp = cfg.processed_dir / fname
+                etl_stats[f"exists:{fname}"] = fp.exists()
+        elif action == "transform-programs":
+            transform_programs(cfg)
+            ran = True
+            # Stats: counts from processed outputs
+            def _count(fp: Path) -> int:
+                if not fp.exists():
+                    return 0
+                with open(fp, encoding="utf-8") as f:
+                    try:
+                        rdr = _detect_reader(f)
+                        return sum(1 for _ in rdr)
+                    except Exception:
+                        f.seek(0)
+                        return sum(1 for _ in csv.DictReader(f))
+            etl_stats.update({
+                "programs.csv_rows": _count(cfg.processed_dir / "programs.csv"),
+                "yearly_cutoffs.csv_rows": _count(cfg.processed_dir / "yearly_cutoffs.csv"),
+                "_code_corrections.csv_rows": _count(cfg.processed_dir / "_code_corrections.csv"),
+            })
+        elif action == "transform-normalize":
             transform_normalize(cfg)
             ran = True
-        return render(request, "admin/etl_process.html", {"action": action, "ran": ran, "processed_dir": str(cfg.processed_dir)})
+            # Stats: normalized outputs
+            def _count(fp: Path) -> int:
+                if not fp.exists():
+                    return 0
+                with open(fp, encoding="utf-8") as f:
+                    try:
+                        rdr = _detect_reader(f)
+                        return sum(1 for _ in rdr)
+                    except Exception:
+                        f.seek(0)
+                        return sum(1 for _ in csv.DictReader(f))
+            def _columns(fp: Path) -> str:
+                if not fp.exists():
+                    return ""
+                with open(fp, encoding="utf-8") as f:
+                    try:
+                        rdr = _detect_reader(f)
+                        return ",".join(rdr.fieldnames or [])
+                    except Exception:
+                        f.seek(0)
+                        return ",".join(csv.DictReader(f).fieldnames or [])
+            etl_stats.update({
+                "programs.csv_rows": _count(cfg.processed_dir / "programs.csv"),
+                "institutions.csv_rows": _count(cfg.processed_dir / "institutions.csv"),
+                "_unclassified_programs.csv_rows": _count(cfg.processed_dir / "_unclassified_programs.csv"),
+                # New derivative outputs
+                "created:program_offerings.csv": (cfg.processed_dir / "program_offerings.csv").exists(),
+                "program_offerings.csv_rows": _count(cfg.processed_dir / "program_offerings.csv"),
+                "created:program_offerings_broad.csv": (cfg.processed_dir / "program_offerings_broad.csv").exists(),
+                "program_offerings_broad.csv_rows": _count(cfg.processed_dir / "program_offerings_broad.csv"),
+                "created:dedup_candidates.csv": (cfg.processed_dir / "dedup_candidates.csv").exists(),
+                "dedup_candidates.csv_rows": _count(cfg.processed_dir / "dedup_candidates.csv"),
+                "created:dedup_summary.csv": (cfg.processed_dir / "dedup_summary.csv").exists(),
+                "dedup_summary.csv_rows": _count(cfg.processed_dir / "dedup_summary.csv"),
+                # Headers for quick visibility
+                "columns:programs.csv": _columns(cfg.processed_dir / "programs.csv"),
+                "columns:institutions.csv": _columns(cfg.processed_dir / "institutions.csv"),
+            })
+        elif action == "dedup-programs":
+            dedup_programs(cfg, inplace=inplace)
+            ran = True
+            # Stats: dedup outputs
+            def _count(fp: Path) -> int:
+                if not fp.exists():
+                    return 0
+                with open(fp, encoding="utf-8") as f:
+                    try:
+                        rdr = _detect_reader(f)
+                        return sum(1 for _ in rdr)
+                    except Exception:
+                        f.seek(0)
+                        return sum(1 for _ in csv.DictReader(f))
+            etl_stats.update({
+                "programs_deduped.csv_rows": _count(cfg.processed_dir / "programs_deduped.csv"),
+                "dedup_suppressed.csv_rows": _count(cfg.processed_dir / "dedup_suppressed.csv"),
+            })
+        elif action == "dq-report":
+            dq_report(cfg)
+            ran = True
+            # Stats: read dq_report.csv metrics
+            dq_fp = cfg.processed_dir / "dq_report.csv"
+            metrics = {}
+            if dq_fp.exists():
+                with open(dq_fp, encoding="utf-8") as f:
+                    for r in csv.DictReader(f):
+                        metrics[r.get("metric") or "metric"] = r.get("value")
+            etl_stats.update(metrics)
+        elif action == "load":
+            load_csvs(cfg, dry_run=dry_run)
+            ran = True
+            if not dry_run:
+                try:
+                    # Post-load verification: expanded counts
+                    from catalog.models import (
+                        Institution, Field, Program, YearlyCutoff,
+                        InstitutionCampus, ProgramOfferingAggregate, ProgramOfferingBroadAggregate,
+                        DedupCandidateGroup, DedupSummary, CodeCorrectionAudit,
+                        ETLRun, DQReportEntry, ClusterSubjectRule, ProgramRequirementNormalized,
+                    )  # type: ignore
+                    load_summary = {
+                        "institutions": Institution.objects.count(),
+                        "fields": Field.objects.count(),
+                        "programs": Program.objects.count(),
+                        "yearly_cutoffs": YearlyCutoff.objects.count(),
+                        "institution_campuses": InstitutionCampus.objects.count(),
+                        "offerings": ProgramOfferingAggregate.objects.count(),
+                        "offerings_broad": ProgramOfferingBroadAggregate.objects.count(),
+                        "dedup_candidate_groups": DedupCandidateGroup.objects.count(),
+                        "dedup_summaries": DedupSummary.objects.count(),
+                        "code_corrections": CodeCorrectionAudit.objects.count(),
+                        "etl_runs": ETLRun.objects.count(),
+                        "dq_entries": DQReportEntry.objects.count(),
+                        "cluster_subject_rules": ClusterSubjectRule.objects.count(),
+                        "normalized_requirements": ProgramRequirementNormalized.objects.count(),
+                    }
+                except Exception:
+                    pass
+        elif action == "all":
+            copy_inputs(cfg)
+            bootstrap_csvs(cfg)
+            load_csvs(cfg, dry_run=dry_run)
+            ran = True
+            if not dry_run:
+                try:
+                    from catalog.models import (
+                        Institution, Field, Program, YearlyCutoff,
+                        InstitutionCampus, ProgramOfferingAggregate, ProgramOfferingBroadAggregate,
+                        DedupCandidateGroup, DedupSummary, CodeCorrectionAudit,
+                        ETLRun, DQReportEntry, ClusterSubjectRule, ProgramRequirementNormalized,
+                    )  # type: ignore
+                    load_summary = {
+                        "institutions": Institution.objects.count(),
+                        "fields": Field.objects.count(),
+                        "programs": Program.objects.count(),
+                        "yearly_cutoffs": YearlyCutoff.objects.count(),
+                        "institution_campuses": InstitutionCampus.objects.count(),
+                        "offerings": ProgramOfferingAggregate.objects.count(),
+                        "offerings_broad": ProgramOfferingBroadAggregate.objects.count(),
+                        "dedup_candidate_groups": DedupCandidateGroup.objects.count(),
+                        "dedup_summaries": DedupSummary.objects.count(),
+                        "code_corrections": CodeCorrectionAudit.objects.count(),
+                        "etl_runs": ETLRun.objects.count(),
+                        "dq_entries": DQReportEntry.objects.count(),
+                        "cluster_subject_rules": ClusterSubjectRule.objects.count(),
+                        "normalized_requirements": ProgramRequirementNormalized.objects.count(),
+                    }
+                except Exception:
+                    pass
+
+        actions = [
+            "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+        ]
+        # Prepare stats list for template rendering
+        etl_stats_kv = sorted([(k, etl_stats[k]) for k in etl_stats.keys()]) if etl_stats else []
+        return render(request, "admin/etl_process.html", {
+            "action": action,
+            "ran": ran,
+            "processed_dir": str(cfg.processed_dir),
+            "raw_dir": str(cfg.raw_dir),
+            "inplace": inplace,
+            "dry_run": dry_run,
+            "messages": msg,
+            "actions": actions,
+            "config_value": config_path,
+            "load_summary": load_summary,
+            "etl_stats_kv": etl_stats_kv,
+        })
     except Exception as e:
-        return render(request, "admin/etl_process.html", {"error": str(e)})
+        actions = [
+            "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+        ]
+        return render(request, "admin/etl_process.html", {"error": str(e), "actions": actions})
+
+# Dev-only: bypass CSRF for admin ETL endpoints when DEBUG or env toggle is set
+# Never enable this in production.
+if settings.DEBUG or os.getenv("DISABLE_CSRF_DEV", "").lower() in ("1", "true", "yes"):
+    admin_etl_upload = csrf_exempt(admin_etl_upload)
+    admin_etl_process = csrf_exempt(admin_etl_process)
 
 
 urlpatterns = [

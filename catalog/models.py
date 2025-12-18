@@ -153,3 +153,167 @@ class DedupMatch(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.duplicate_program_id} -> {self.master_program_id}"
+
+
+# -----------------------------------------
+# New models (derived from ETL CSV artifacts)
+# -----------------------------------------
+
+
+class InstitutionCampus(TimestampedModel):
+    """Campus-level geo for an Institution (from mappings/institutions_campuses.csv)."""
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name="campuses")
+    campus = models.CharField(max_length=128)
+    town = models.CharField(max_length=128, blank=True)
+    county = models.CharField(max_length=64, blank=True)
+    region = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        unique_together = (("institution", "campus"),)
+        indexes = [models.Index(fields=["region"]), models.Index(fields=["county"])]
+        ordering = ["institution", "campus"]
+
+    def __str__(self) -> str:
+        return f"{self.institution.code}:{self.campus}"
+
+
+class ProgramOfferingAggregate(TimestampedModel):
+    """Aggregate of unique institutions offering a course variant (program_offerings.csv)."""
+    program_normalized_name = models.CharField(max_length=255, db_index=True)
+    course_suffix = models.CharField(max_length=16, blank=True)
+    offerings_count = models.PositiveIntegerField()
+
+    class Meta:
+        unique_together = (("program_normalized_name", "course_suffix"),)
+        ordering = ["program_normalized_name", "course_suffix"]
+
+    def __str__(self) -> str:
+        return f"{self.program_normalized_name} [{self.course_suffix}]: {self.offerings_count}"
+
+
+class ProgramOfferingBroadAggregate(TimestampedModel):
+    """Aggregate across degree families (program_offerings_broad.csv)."""
+    program_normalized_name = models.CharField(max_length=255, unique=True)
+    offerings_count = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ["program_normalized_name"]
+
+    def __str__(self) -> str:
+        return f"{self.program_normalized_name}: {self.offerings_count}"
+
+
+class DedupCandidateGroup(TimestampedModel):
+    """Duplicate group suggested by ETL (from dedup_candidates.csv)."""
+    institution = models.ForeignKey(Institution, null=True, blank=True, on_delete=models.SET_NULL, related_name="dedup_candidate_groups")
+    institution_code = models.CharField(max_length=32, blank=True)
+    institution_name = models.CharField(max_length=255, blank=True)
+    normalized_name = models.CharField(max_length=255)
+    level = models.CharField(max_length=32, choices=ProgramLevel.choices)
+    campus = models.CharField(max_length=128, blank=True)
+    rows_count = models.PositiveIntegerField(default=0)
+    program_codes = models.JSONField(default=list, blank=True)
+    name_variants = models.JSONField(default=list, blank=True)
+    suggested_master_program_code = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        unique_together = (("institution", "normalized_name", "level", "campus"),)
+        indexes = [models.Index(fields=["level"]), models.Index(fields=["campus"])]
+        ordering = ["-rows_count"]
+
+    def __str__(self) -> str:
+        return f"dup:{self.institution_code}:{self.normalized_name}:{self.level}:{self.campus}"
+
+
+class DedupSummary(TimestampedModel):
+    """Per-institution summary of duplicate groups/rows (from dedup_summary.csv)."""
+    institution = models.ForeignKey(Institution, null=True, blank=True, on_delete=models.SET_NULL, related_name="dedup_summaries")
+    institution_code = models.CharField(max_length=32, blank=True)
+    institution_name = models.CharField(max_length=255, blank=True)
+    duplicate_groups = models.PositiveIntegerField(default=0)
+    duplicate_rows = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = (("institution",),)
+        ordering = ["-duplicate_rows"]
+
+    def __str__(self) -> str:
+        return f"summary:{self.institution_code} g={self.duplicate_groups} r={self.duplicate_rows}"
+
+
+class CodeCorrectionAudit(TimestampedModel):
+    """Audit for program code normalization (_code_corrections.csv)."""
+    program_code_before = models.CharField(max_length=64, blank=True)
+    program_code_after = models.CharField(max_length=64, blank=True)
+    correction_type = models.CharField(max_length=64, blank=True)
+    institution_code = models.CharField(max_length=32, blank=True)
+    group_key = models.CharField(max_length=128, blank=True)
+    reason = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["correction_type"])]
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.program_code_before}->{self.program_code_after} ({self.correction_type})"
+
+
+class ETLRun(TimestampedModel):
+    """Basic audit trail for ETL actions and their computed stats."""
+    action = models.CharField(max_length=64)
+    config_path = models.CharField(max_length=255, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    stats = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["action", "created_at"])]
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.action}@{self.created_at:%Y-%m-%d %H:%M:%S}"
+
+
+class DQReportEntry(TimestampedModel):
+    """Data quality metric line item (from dq_report.csv)."""
+    run = models.ForeignKey(ETLRun, null=True, blank=True, on_delete=models.SET_NULL, related_name="dq_entries")
+    metric_name = models.CharField(max_length=128)
+    value = models.CharField(max_length=64)
+    scope = models.CharField(max_length=64, blank=True)
+    extra = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["metric_name"])]
+        ordering = ["metric_name"]
+
+    def __str__(self) -> str:
+        return f"{self.metric_name}={self.value}"
+
+
+class ClusterSubjectRule(TimestampedModel):
+    """Eligibility cluster rule from mappings/cluster_subjects.csv."""
+    program_pattern = models.CharField(max_length=255, db_index=True)
+    subjects_grammar = models.TextField()
+
+    class Meta:
+        ordering = ["program_pattern"]
+
+    def __str__(self) -> str:
+        return self.program_pattern
+
+
+class ProgramRequirementNormalized(TimestampedModel):
+    """Optional normalized store for subject requirements extracted from Program JSON.
+    This is a lightweight denormalization for future advanced eligibility.
+    """
+    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name="normalized_requirements")
+    required = models.JSONField(default=list, blank=True)
+    groups = models.JSONField(default=list, blank=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["program"]
+
+    def __str__(self) -> str:
+        return f"reqs:{self.program_id}"

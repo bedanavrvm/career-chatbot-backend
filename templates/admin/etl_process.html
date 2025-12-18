@@ -5,18 +5,56 @@
 {% if error %}
 <div style="color:#a00">Error: {{ error }}</div>
 {% endif %}
-{% if ran %}
-<div style="color:#070">Action ran: {{ action }}. Processed dir: <code>{{ processed_dir }}</code></div>
+{% if messages %}
+  {% for m in messages %}
+    <div style="color:#333">{{ m }}</div>
+  {% endfor %}
 {% endif %}
+{% if ran %}
+<div style="color:#070">Action ran: <b>{{ action }}</b></div>
+<div>Processed dir: <code>{{ processed_dir }}</code></div>
+{% if raw_dir %}<div>Raw dir: <code>{{ raw_dir }}</code></div>{% endif %}
+{% if etl_stats_kv %}
+<h3>Stats</h3>
+<ul>
+  {% for k,v in etl_stats_kv %}
+    <li><code>{{ k }}</code>: {{ v }}</li>
+  {% endfor %}
+  {% if load_summary %}
+    <li><code>loaded_institutions</code>: {{ load_summary.institutions }}</li>
+    <li><code>loaded_fields</code>: {{ load_summary.fields }}</li>
+    <li><code>loaded_programs</code>: {{ load_summary.programs }}</li>
+    <li><code>loaded_yearly_cutoffs</code>: {{ load_summary.yearly_cutoffs }}</li>
+  {% endif %}
+  {% if not etl_stats_kv and load_summary %}
+    <li><code>loaded_institutions</code>: {{ load_summary.institutions }}</li>
+    <li><code>loaded_fields</code>: {{ load_summary.fields }}</li>
+    <li><code>loaded_programs</code>: {{ load_summary.programs }}</li>
+    <li><code>loaded_yearly_cutoffs</code>: {{ load_summary.yearly_cutoffs }}</li>
+  {% endif %}
+</ul>
+{% endif %}
+{% endif %}
+
 <form method="post">
   {% csrf_token %}
   <p>
     <label>Action</label>
     <select name="action">
-      <option value="transform-normalize" {% if action == 'transform-normalize' %}selected{% endif %}>transform-normalize</option>
+      {% for a in actions %}
+        <option value="{{ a }}" {% if action == a %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
     </select>
   </p>
+  <p>
+    <label>Config path (optional)</label>
+    <input type="text" name="config" value="{{ config_value }}" placeholder="scripts/etl/kuccps/config.yaml" style="width: 420px;"/>
+  </p>
+  <p>
+    <label><input type="checkbox" name="inplace" {% if inplace %}checked{% endif %}/> inplace (dedup-programs)</label>
+    <label style="margin-left: 16px;"><input type="checkbox" name="dry_run" {% if dry_run %}checked{% endif %}/> dry_run (load)</label>
+  </p>
   <p><button type="submit" class="default">Run</button></p>
+  <p><a href="/admin/etl/upload">Back to Upload</a></p>
 </form>
-<p><a href="/admin/etl/upload">Back to Upload</a></p>
 {% endblock %}
