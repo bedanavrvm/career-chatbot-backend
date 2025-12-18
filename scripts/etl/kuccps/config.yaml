@@ -1,0 +1,22 @@
+# KUCCPS ETL configuration (skeleton)
+# Adjust dataset_root if your workspace path differs.
+
+dataset_year: 2025
+
+dataset_root: "/home/user7/Documents/DELPHINE/Student Career Datasets"
+
+# Map logical names -> relative paths inside dataset_root
+inputs:
+  programs_pdf: "DEGREE_PROGRAMMES_2025.pdf"
+  programs_pdf_alt: "DEGREE_PROGRAMMES_2025_1.pdf"
+  clusters_pdf: "DEGREE_CLUSTER_DOCUMENT_2025_03.pdf"
+  cutoffs_pdf: "DEGREE_CUTOFFS_14-07-2025.pdf"
+  clusters_2017_pdf: "KUCCPS_Clusters_2017.pdf"
+  degree_programmes_20_21_pdf: "Degree Programmes Cut-offs 20-21.pdf"
+  degree_programmes_21_22_pdf: "Degree Programmes Cut-offs 21-22.pdf"
+  degree_programmes_22_23_pdf: "Degree Programmes Cut-offs 22-23.pdf"
+  tvet_clusters_pdf: "TVET_CLUSTER_DOCUMENT_2025.pdf"
+
+# Optional overrides
+raw_dir: ""
+processed_dir: ""

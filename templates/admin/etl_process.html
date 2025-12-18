@@ -1,0 +1,22 @@
+{% extends "admin/base_site.html" %}
+{% block title %}ETL Process{% endblock %}
+{% block content %}
+<h1>ETL Process</h1>
+{% if error %}
+<div style="color:#a00">Error: {{ error }}</div>
+{% endif %}
+{% if ran %}
+<div style="color:#070">Action ran: {{ action }}. Processed dir: <code>{{ processed_dir }}</code></div>
+{% endif %}
+<form method="post">
+  {% csrf_token %}
+  <p>
+    <label>Action</label>
+    <select name="action">
+      <option value="transform-normalize" {% if action == 'transform-normalize' %}selected{% endif %}>transform-normalize</option>
+    </select>
+  </p>
+  <p><button type="submit" class="default">Run</button></p>
+</form>
+<p><a href="/admin/etl/upload">Back to Upload</a></p>
+{% endblock %}

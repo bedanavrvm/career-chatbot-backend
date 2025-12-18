@@ -42,6 +42,7 @@ ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()] 
 INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
+    'catalog',
     'accounts',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -80,7 +81,7 @@ elif not DEBUG and _cors_allowed:
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
