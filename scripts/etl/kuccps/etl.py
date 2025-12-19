@@ -1402,6 +1402,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         ProgramRequirementNormalized,
         ProgramRequirementGroup,
         ProgramRequirementOption,
+        ProgramCost,
     )
 
     @transaction.atomic
@@ -1609,37 +1610,84 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                     code = (r.get("program_code") or "").strip()
                     if code:
                         latest[code] = r
+                def _parse_currency_and_amount(raw: str) -> Tuple[Optional[Decimal], str]:
+                    s = (raw or "").strip()
+                    if not s:
+                        return None, ""
+                    cur = "KES"
+                    uc = s.upper()
+                    # Basic currency detection
+                    if "USD" in uc or uc.startswith("$"):
+                        cur = "USD"
+                    elif "KSH" in uc or "KSHS" in uc or "KSH." in uc or "KSHS." in uc or "KES" in uc or "KSH" in uc or "KSHS" in uc:
+                        cur = "KES"
+                    # Extract numeric
+                    num_txt = re.sub(r"[^0-9.]+", "", s)
+                    if not num_txt:
+                        return None, cur
+                    try:
+                        return Decimal(num_txt), cur
+                    except Exception:
+                        return None, cur
+
                 for code, row in latest.items():
-                    prog = Program.objects.filter(code=code).first()
-                    if not prog:
-                        continue
                     raw_cost = (row.get("cost") or "").strip()
                     sid = (row.get("source_id") or "").strip() or "default"
-                    # Parse numeric cost if possible (keep raw too)
-                    digits = re.sub(r"[^0-9.]+", "", raw_cost)
-                    num = None
-                    if digits:
-                        try:
-                            num = float(digits)
-                        except Exception:
-                            num = None
-                    meta = prog.metadata or {}
-                    prev_num = meta.get("cost") if isinstance(meta, dict) else None
-                    prev_raw = meta.get("cost_raw") if isinstance(meta, dict) else None
-                    new_meta = {
-                        "cost": num,
-                        "cost_raw": raw_cost,
-                        "cost_source_id": (row.get("source_id") or "").strip(),
-                    }
-                    if prev_num == new_meta["cost"] and str(prev_raw or "").strip() == new_meta["cost_raw"]:
-                        inc("program_costs_unchanged", sid)
-                        continue
-                    prog.metadata = {**(meta or {}), **new_meta}
-                    prog.save(update_fields=["metadata"])
-                    if prev_num is None and (prev_raw is None or str(prev_raw).strip() == ""):
+                    amount, currency = _parse_currency_and_amount(raw_cost)
+                    # Upsert ProgramCost (keyed by program_code + source_id). Link Program if available.
+                    pc, created_pc = ProgramCost.objects.get_or_create(
+                        program_code=code,
+                        source_id=sid,
+                        defaults={
+                            "raw_cost": raw_cost,
+                            "amount": amount,
+                            "currency": currency or "KES",
+                            "institution_name": (row.get("institution_name") or "").strip(),
+                            "program_name": (row.get("program_name") or "").strip(),
+                        },
+                    )
+                    updated_pc = False
+                    if not created_pc:
+                        # Update diffs only
+                        new_vals = {
+                            "raw_cost": raw_cost,
+                            "amount": amount,
+                            "currency": currency or (pc.currency or "KES"),
+                            "institution_name": (row.get("institution_name") or "").strip() or pc.institution_name,
+                            "program_name": (row.get("program_name") or "").strip() or pc.program_name,
+                        }
+                        for k, v in new_vals.items():
+                            if getattr(pc, k) != v:
+                                setattr(pc, k, v)
+                                updated_pc = True
+                        if updated_pc:
+                            pc.save()
+                    # Link to Program
+                    prog = Program.objects.filter(code=code).first()
+                    if prog and pc.program_id != prog.id:
+                        pc.program = prog
+                        pc.save(update_fields=["program"])
+                        updated_pc = True or updated_pc
+                    # Maintain counters and also keep Program.metadata cost for quick reference
+                    if created_pc:
                         inc("program_costs_created", sid)
-                    else:
+                    elif updated_pc:
                         inc("program_costs_updated", sid)
+                    else:
+                        inc("program_costs_unchanged", sid)
+                    if prog:
+                        meta = prog.metadata or {}
+                        prev_num = meta.get("cost") if isinstance(meta, dict) else None
+                        prev_raw = meta.get("cost_raw") if isinstance(meta, dict) else None
+                        new_meta = {
+                            "cost": float(amount) if isinstance(amount, Decimal) else (amount if amount is None else float(amount)),
+                            "cost_raw": raw_cost,
+                            "cost_currency": currency or "KES",
+                            "cost_source_id": sid,
+                        }
+                        if prev_num != new_meta["cost"] or str(prev_raw or "").strip() != new_meta["cost_raw"]:
+                            prog.metadata = {**(meta or {}), **new_meta}
+                            prog.save(update_fields=["metadata"])
         # Cutoffs
         cut_path = cfg.processed_dir / "yearly_cutoffs.csv"
         if cut_path.exists():
@@ -2380,6 +2428,73 @@ def dq_report(cfg: Config) -> None:
                 except Exception:
                     pass
 
+    # v2: Additional metrics
+    # - Pre-canonical suffix conflicts from raw programs.csv
+    # - Override coverage (CSV and DB counts)
+    # - Program cost completeness (from processed/program_costs.csv)
+    suffix_conflicts = 0
+    try:
+        raw_prog = cfg.processed_dir / "programs.csv"
+        if raw_prog.exists():
+            with open(raw_prog, encoding="utf-8") as f:
+                # Detect delimiter (TSV expected)
+                header = f.readline(); rest = f.read(4096); f.seek(0)
+                try:
+                    if "\t" in header:
+                        reader = csv.DictReader(f, delimiter="\t")
+                    else:
+                        sample = header + rest
+                        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                        reader = csv.DictReader(f, dialect=dialect)
+                except Exception:
+                    f.seek(0); reader = csv.DictReader(f, delimiter="\t")
+                by_sfx: Dict[str, set] = defaultdict(set)
+                for row in reader:
+                    sfx = (row.get("course_suffix") or "").strip()
+                    nm = (row.get("normalized_name") or row.get("name") or "").strip()
+                    if sfx and nm:
+                        by_sfx[sfx].add(nm)
+                suffix_conflicts = sum(1 for sfx, names in by_sfx.items() if len(names) > 1)
+    except Exception:
+        pass
+
+    # Override coverage counts
+    csv_overrides = 0
+    db_overrides = 0
+    try:
+        csv_overrides = len(_load_suffix_overrides())
+    except Exception:
+        csv_overrides = 0
+    try:
+        db_overrides = len(_load_suffix_overrides_db())
+    except Exception:
+        db_overrides = 0
+
+    # Program cost completeness
+    cost_rows = 0
+    cost_programs = 0
+    try:
+        pc_fp = cfg.processed_dir / "program_costs.csv"
+        if pc_fp.exists():
+            with open(pc_fp, encoding="utf-8") as f:
+                # Detect dialect including TSV
+                head = f.readline(); rest = f.read(4096); f.seek(0)
+                try:
+                    if "\t" in head:
+                        reader = csv.DictReader(f, delimiter="\t")
+                    else:
+                        sample = head + rest
+                        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+                        reader = csv.DictReader(f, dialect=dialect)
+                except Exception:
+                    f.seek(0); reader = csv.DictReader(f, delimiter="\t")
+                rows = list(reader)
+                cost_rows = len(rows)
+                have_cost_codes = { (r.get("program_code") or "").strip() for r in rows if (r.get("cost") or "").strip() }
+                cost_programs = len({c for c in have_cost_codes if c})
+    except Exception:
+        pass
+
     # Write report
     out = cfg.processed_dir / "dq_report.csv"
     with open(out, "w", newline="", encoding="utf-8") as f:
@@ -2393,6 +2508,17 @@ def dq_report(cfg: Config) -> None:
         w.writerow(["unclassified_count", unclassified_count, "rows in _unclassified_programs.csv if present"])
         for name, count in top_unclassified:
             w.writerow(["unclassified_top_name", count, name])
+        # v2
+        w.writerow(["suffix_conflicts_pre_canonical", suffix_conflicts, "distinct normalized_names per course_suffix in programs.csv"])
+        w.writerow(["overrides_csv_count", csv_overrides, "rows in mappings/course_suffix_map_overrides.csv"])
+        w.writerow(["overrides_db_count", db_overrides, "active CourseSuffixMapping rows"]) 
+        if total_programs:
+            ratio = f"{cost_programs}/{total_programs}"
+        else:
+            ratio = "0/0"
+        w.writerow(["costs_rows", cost_rows, "rows in program_costs.csv (latest per code)"])
+        w.writerow(["costs_programs_with_cost", cost_programs, "unique program_code with cost in program_costs.csv"])
+        w.writerow(["costs_programs_ratio", ratio, "programs with cost vs programs_total"])
     logger.info("dq-report: wrote %s", out)
 
 

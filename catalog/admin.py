@@ -1,4 +1,8 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.http import HttpResponse
+from django.conf import settings
+import csv
+from pathlib import Path
 from .models import (
     Institution,
     Field,
@@ -158,3 +162,57 @@ class CourseSuffixMappingAdmin(admin.ModelAdmin):
     list_display = ("course_suffix", "normalized_name", "field_name", "is_active", "updated_at")
     search_fields = ("course_suffix", "normalized_name", "field_name")
     list_filter = ("is_active",)
+    actions = ("export_selected_as_csv", "import_from_mappings_csv",)
+
+    def export_selected_as_csv(self, request, queryset):
+        """Export selected CourseSuffixMapping rows as CSV."""
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = "attachment; filename=course_suffix_mappings.csv"
+        writer = csv.writer(response)
+        writer.writerow(["course_suffix", "normalized_name", "field_name", "is_active"]) 
+        for obj in queryset:
+            writer.writerow([obj.course_suffix, obj.normalized_name, obj.field_name, obj.is_active])
+        return response
+    export_selected_as_csv.short_description = "Export selected as CSV"
+
+    def import_from_mappings_csv(self, request, queryset):
+        """Import/Upsert mappings from the repo CSV at kuccps/mappings/course_suffix_map_overrides.csv.
+
+        This is a convenience import (server-side path). For ad-hoc uploads, use the Django shell or a custom view.
+        """
+        base = Path(getattr(settings, "BASE_DIR", "."))
+        rel = Path("scripts/etl/kuccps/mappings/course_suffix_map_overrides.csv")
+        csv_path = (base / rel).resolve()
+        if not csv_path.exists():
+            self.message_user(request, f"CSV not found: {csv_path}", level=messages.ERROR)
+            return
+        from .models import CourseSuffixMapping
+        created = 0
+        updated = 0
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sfx = (row.get("course_suffix") or "").strip()
+                if not sfx:
+                    continue
+                nm = (row.get("normalized_name") or "").strip()
+                fd = (row.get("field_name") or "").strip()
+                obj, was_created = CourseSuffixMapping.objects.get_or_create(course_suffix=sfx, defaults={
+                    "normalized_name": nm or "",
+                    "field_name": fd or "",
+                    "is_active": True,
+                })
+                if was_created:
+                    created += 1
+                else:
+                    changed = False
+                    if nm and obj.normalized_name != nm:
+                        obj.normalized_name = nm; changed = True
+                    if fd and obj.field_name != fd:
+                        obj.field_name = fd; changed = True
+                    if not obj.is_active:
+                        obj.is_active = True; changed = True
+                    if changed:
+                        obj.save(); updated += 1
+        self.message_user(request, f"Import complete. Created={created}, Updated={updated}", level=messages.SUCCESS)
+    import_from_mappings_csv.short_description = "Import from kuccps mappings CSV"

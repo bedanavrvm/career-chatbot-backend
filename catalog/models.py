@@ -417,3 +417,28 @@ class CourseSuffixMapping(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.course_suffix} -> {self.normalized_name} ({self.field_name})"
+
+
+class ProgramCost(TimestampedModel):
+    """Normalized program cost entry derived from ETL program_costs.csv.
+
+    Links to Program when a match by code is found; otherwise keeps program_code
+    and source metadata to allow later reconciliation.
+    """
+    program = models.ForeignKey(Program, null=True, blank=True, on_delete=models.SET_NULL, related_name="costs")
+    program_code = models.CharField(max_length=64, db_index=True, blank=True)
+    institution_name = models.CharField(max_length=255, blank=True)
+    program_name = models.CharField(max_length=255, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=16, blank=True, default="KES")
+    source_id = models.CharField(max_length=64, blank=True)
+    raw_cost = models.CharField(max_length=64, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        unique_together = (("program_code", "source_id"),)
+        indexes = [models.Index(fields=["program_code", "source_id"])]
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"{self.program_code or (self.program.code if self.program_id else '')}: {self.amount} {self.currency}"
