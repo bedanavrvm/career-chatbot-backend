@@ -174,3 +174,5 @@ NLP_MIN_CONFIDENCE = float(os.getenv('NLP_MIN_CONFIDENCE', '0.4') or '0.4')
 NLP_PROVIDER = (os.getenv('NLP_PROVIDER', 'local') or 'local').strip().lower()
 # Gemini API key (optional). If empty, local NLP is used.
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
+# Gemini Model name (when using Gemini). Defaults to a fast model.
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip()

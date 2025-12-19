@@ -1,5 +1,6 @@
 import re
 from typing import Dict, List, Tuple, Any
+from django.conf import settings
 
 # Lightweight NLP utilities (no heavy external deps). Optional LLM provider can be added.
 
@@ -116,12 +117,21 @@ def compute_confidence(grades: Dict[str, str], traits: Dict[str, float]) -> floa
 
 
 def analyze(text: str) -> Dict[str, Any]:
-    """End-to-end lightweight NLP analysis returning a dict with
-    - grades: subject->grade
-    - traits: RIASEC-like scores
-    - intents: list of intents
-    - confidence: float [0..1]
+    """End-to-end NLP analysis with optional Gemini provider.
+    Returns dict with keys: grades, traits, intents, confidence.
     """
+    provider = (getattr(settings, 'NLP_PROVIDER', 'local') or 'local').strip().lower()
+    if provider == 'gemini':
+        api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+        model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
+        if api_key:
+            try:
+                from .providers.gemini_provider import analyze_text  # type: ignore
+                return analyze_text(text, api_key=api_key, model_name=model_name)
+            except Exception:
+                # Fall back to local pipeline on any error
+                pass
+    # Local lightweight pipeline
     grades = extract_subject_grade_pairs(text)
     traits = extract_traits(text)
     intents = detect_intents(text, grades)
