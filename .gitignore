@@ -33,3 +33,7 @@ Thumbs.db
 
 # DB
 *.sqlite3
+
+
+/scripts/etl/kuccps/processed
+/scripts/etl/kuccps/raw

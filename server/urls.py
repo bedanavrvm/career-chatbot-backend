@@ -491,6 +491,8 @@ def admin_etl_process(request):
                             # fallback to path relative to etl_dir
                             rel = latest.resolve().relative_to(etl_dir)
                         cfg.inputs["programs_pdf"] = str(rel)
+                        # Infer a source_id from the PDF filename for namespacing/provenance
+                        cfg.inputs["source_id"] = latest.stem
                         msg.append(f"Detected uploaded PDF: {latest.name}")
                 if not cfg.inputs.get("programs_pdf"):
                     return render(request, "admin/etl_process.html", {
@@ -549,6 +551,8 @@ def admin_etl_process(request):
                 "programs.csv_rows": _count(cfg.processed_dir / "programs.csv"),
                 "yearly_cutoffs.csv_rows": _count(cfg.processed_dir / "yearly_cutoffs.csv"),
                 "_code_corrections.csv_rows": _count(cfg.processed_dir / "_code_corrections.csv"),
+                "created:program_costs.csv": (cfg.processed_dir / "program_costs.csv").exists(),
+                "program_costs.csv_rows": _count(cfg.processed_dir / "program_costs.csv"),
             })
         elif action == "transform-normalize":
             transform_normalize(cfg)
@@ -621,7 +625,7 @@ def admin_etl_process(request):
                         metrics[r.get("metric") or "metric"] = r.get("value")
             etl_stats.update(metrics)
         elif action == "load":
-            load_csvs(cfg, dry_run=dry_run)
+            changes = load_csvs(cfg, dry_run=dry_run)
             ran = True
             if not dry_run:
                 try:
@@ -631,7 +635,10 @@ def admin_etl_process(request):
                         InstitutionCampus, ProgramOfferingAggregate, ProgramOfferingBroadAggregate,
                         DedupCandidateGroup, DedupSummary, CodeCorrectionAudit,
                         ETLRun, DQReportEntry, ClusterSubjectRule, ProgramRequirementNormalized,
+                        ProgramRequirementGroup, ProgramRequirementOption,
                     )  # type: ignore
+                    totals = (changes or {}).get("totals") or {}
+                    by_source = (changes or {}).get("by_source") or {}
                     load_summary = {
                         "institutions": Institution.objects.count(),
                         "fields": Field.objects.count(),
@@ -647,13 +654,39 @@ def admin_etl_process(request):
                         "dq_entries": DQReportEntry.objects.count(),
                         "cluster_subject_rules": ClusterSubjectRule.objects.count(),
                         "normalized_requirements": ProgramRequirementNormalized.objects.count(),
+                        "requirement_groups": ProgramRequirementGroup.objects.count(),
+                        "requirement_options": ProgramRequirementOption.objects.count(),
+                        "changes_totals": totals,
+                        "changes_by_source": by_source,
                     }
+                    # Flatten for quick visibility
+                    for k, v in totals.items():
+                        etl_stats[f"changes:totals:{k}"] = v
+                    for sid, sub in by_source.items():
+                        for k, v in sub.items():
+                            etl_stats[f"changes:by_source:{sid}:{k}"] = v
                 except Exception:
                     pass
         elif action == "all":
             copy_inputs(cfg)
             bootstrap_csvs(cfg)
-            load_csvs(cfg, dry_run=dry_run)
+            # Auto-extract all uploaded PDFs under raw/uploads (multi-source)
+            uploads = (etl_dir / "raw" / "uploads")
+            if uploads.exists():
+                pdfs = sorted(uploads.glob("*.pdf"))
+                for latest in pdfs:
+                    try:
+                        rel = latest.resolve().relative_to(cfg.dataset_root)
+                    except Exception:
+                        rel = latest.resolve().relative_to(etl_dir)
+                    cfg.inputs["programs_pdf"] = str(rel)
+                    cfg.inputs["source_id"] = latest.stem
+                    extract_programs(cfg)
+            transform_programs(cfg)
+            transform_normalize(cfg)
+            dedup_programs(cfg, inplace=False)
+            dq_report(cfg)
+            changes = load_csvs(cfg, dry_run=dry_run)
             ran = True
             if not dry_run:
                 try:
@@ -662,7 +695,10 @@ def admin_etl_process(request):
                         InstitutionCampus, ProgramOfferingAggregate, ProgramOfferingBroadAggregate,
                         DedupCandidateGroup, DedupSummary, CodeCorrectionAudit,
                         ETLRun, DQReportEntry, ClusterSubjectRule, ProgramRequirementNormalized,
+                        ProgramRequirementGroup, ProgramRequirementOption,
                     )  # type: ignore
+                    totals = (changes or {}).get("totals") or {}
+                    by_source = (changes or {}).get("by_source") or {}
                     load_summary = {
                         "institutions": Institution.objects.count(),
                         "fields": Field.objects.count(),
@@ -678,7 +714,16 @@ def admin_etl_process(request):
                         "dq_entries": DQReportEntry.objects.count(),
                         "cluster_subject_rules": ClusterSubjectRule.objects.count(),
                         "normalized_requirements": ProgramRequirementNormalized.objects.count(),
+                        "requirement_groups": ProgramRequirementGroup.objects.count(),
+                        "requirement_options": ProgramRequirementOption.objects.count(),
+                        "changes_totals": totals,
+                        "changes_by_source": by_source,
                     }
+                    for k, v in totals.items():
+                        etl_stats[f"changes:totals:{k}"] = v
+                    for sid, sub in by_source.items():
+                        for k, v in sub.items():
+                            etl_stats[f"changes:by_source:{sid}:{k}"] = v
                 except Exception:
                     pass
 

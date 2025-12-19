@@ -102,6 +102,32 @@ class Program(TimestampedModel):
     def __str__(self) -> str:
         return f"{self.normalized_name} @ {self.institution.code}"
 
+    def requirements_preview(self) -> str:
+        groups = list(self.requirement_groups.all().order_by("order"))
+        parts = []
+        for g in groups:
+            parts.append(g.options_preview())
+        return " | ".join(parts)
+
+    def _subj_preview(self, idx: int) -> str:
+        try:
+            g = self.requirement_groups.all().order_by("order")[idx - 1]
+            return g.options_preview()
+        except Exception:
+            return ""
+
+    def subj1(self) -> str:
+        return self._subj_preview(1)
+
+    def subj2(self) -> str:
+        return self._subj_preview(2)
+
+    def subj3(self) -> str:
+        return self._subj_preview(3)
+
+    def subj4(self) -> str:
+        return self._subj_preview(4)
+
 
 class YearlyCutoff(TimestampedModel):
     """Yearly cutoff score per program; optional capacity and notes."""
@@ -317,3 +343,53 @@ class ProgramRequirementNormalized(TimestampedModel):
 
     def __str__(self) -> str:
         return f"reqs:{self.program_id}"
+
+
+class ProgramRequirementGroup(TimestampedModel):
+    """Relational grouping for subject requirements per Program.
+    Each group represents a column like 'Subj 1' where pick indicates how many options
+    must be satisfied from the listed options.
+    """
+    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name="requirement_groups")
+    name = models.CharField(max_length=128, blank=True)
+    pick = models.PositiveIntegerField(default=1)
+    order = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        unique_together = (("program", "order"),)
+        ordering = ["program", "order"]
+
+    def __str__(self) -> str:
+        return f"{self.program_id}:{self.name or 'Group'}#{self.order} (pick {self.pick})"
+
+    def options_preview(self) -> str:
+        """Concise preview like 'pick 1: ENG B+ / MAT B or BIO B' using subject names or codes."""
+        opts = list(self.options.all().order_by("order"))
+        parts = []
+        for o in opts:
+            label = o.subject.name if o.subject_id else (o.subject_code or "?")
+            if o.min_grade:
+                parts.append(f"{label} {o.min_grade}")
+            else:
+                parts.append(label)
+        sep = " / "  # either/or
+        body = sep.join(parts)
+        return f"pick {self.pick}: {body}" if body else f"pick {self.pick}"
+
+
+class ProgramRequirementOption(TimestampedModel):
+    """Option within a requirement group, typically a subject and minimum grade."""
+    group = models.ForeignKey(ProgramRequirementGroup, on_delete=models.CASCADE, related_name="options")
+    subject = models.ForeignKey(Subject, null=True, blank=True, on_delete=models.SET_NULL, related_name="requirement_options")
+    subject_code = models.CharField(max_length=32, blank=True)
+    min_grade = models.CharField(max_length=8, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["subject_code"])]
+        ordering = ["group", "order"]
+
+    def __str__(self) -> str:
+        return f"{self.group_id}:{self.subject_code or (self.subject.code if self.subject_id else '')} >= {self.min_grade}"

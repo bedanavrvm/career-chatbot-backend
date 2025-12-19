@@ -17,6 +17,8 @@ from .models import (
     DQReportEntry,
     ClusterSubjectRule,
     ProgramRequirementNormalized,
+    ProgramRequirementGroup,
+    ProgramRequirementOption,
 )
 
 
@@ -41,7 +43,7 @@ class SubjectAdmin(admin.ModelAdmin):
 
 @admin.register(Program)
 class ProgramAdmin(admin.ModelAdmin):
-    list_display = ("normalized_name", "institution", "level", "region")
+    list_display = ("normalized_name", "institution", "level", "region", "subj1", "subj2", "subj3", "subj4")
     search_fields = ("normalized_name", "name", "code", "region", "campus")
     list_filter = ("level", "region", "institution")
 
@@ -128,3 +130,23 @@ class ClusterSubjectRuleAdmin(admin.ModelAdmin):
 class ProgramRequirementNormalizedAdmin(admin.ModelAdmin):
     list_display = ("program",)
     search_fields = ("program__normalized_name",)
+
+
+class ProgramRequirementOptionInline(admin.TabularInline):
+    model = ProgramRequirementOption
+    extra = 0
+    fields = ("order", "subject", "subject_code", "min_grade")
+
+
+@admin.register(ProgramRequirementGroup)
+class ProgramRequirementGroupAdmin(admin.ModelAdmin):
+    list_display = ("program", "order", "name", "pick", "options_preview")
+    search_fields = ("program__normalized_name", "name")
+    list_filter = ("pick",)
+    inlines = [ProgramRequirementOptionInline]
+
+
+@admin.register(ProgramRequirementOption)
+class ProgramRequirementOptionAdmin(admin.ModelAdmin):
+    list_display = ("group", "order", "subject", "subject_code", "min_grade")
+    search_fields = ("group__program__normalized_name", "subject__name", "subject_code", "min_grade")

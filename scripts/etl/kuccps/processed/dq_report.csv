@@ -1,7 +1,0 @@
-metric,value,notes
-programs_total,2080,base=programs_deduped.csv
-programs_missing_region,0,program-level region cell is empty
-programs_missing_county,0,derived via institutions.csv county
-duplicates_groups,4,sum of dedup_summary.csv duplicate_groups
-duplicates_rows,8,sum of dedup_summary.csv duplicate_rows
-unclassified_count,0,rows in _unclassified_programs.csv if present
