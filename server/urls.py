@@ -257,6 +257,105 @@ def api_eligibility(request):
         return JsonResponse({"detail": str(e)}, status=500)
 
 
+def api_suffix_mapping(request):
+    """GET /api/catalog/suffix-mapping
+    Query params: q (search on course_suffix or normalized_name), active (0/1), page, page_size
+    Returns DB-backed CourseSuffixMapping rows.
+    """
+    try:
+        from catalog.models import CourseSuffixMapping  # type: ignore
+        q = (request.GET.get("q") or "").strip().lower()
+        active = request.GET.get("active")
+        page = max(1, int(request.GET.get("page", 1)))
+        page_size = max(1, min(50, int(request.GET.get("page_size", 20))))
+        qs = CourseSuffixMapping.objects.all().order_by("course_suffix")
+        if active in ("0", "1"):
+            qs = qs.filter(is_active=(active == "1"))
+        items = []
+        for obj in qs:
+            if q and not (
+                q in (obj.course_suffix or "").lower() or q in (obj.normalized_name or "").lower()
+            ):
+                continue
+            items.append({
+                "course_suffix": obj.course_suffix,
+                "normalized_name": obj.normalized_name,
+                "field_name": obj.field_name,
+                "is_active": obj.is_active,
+                "updated_at": obj.updated_at.isoformat() if obj.updated_at else "",
+            })
+        total = len(items)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return JsonResponse({
+            "count": total,
+            "page": page,
+            "page_size": page_size,
+            "results": items[start:end],
+        })
+    except Exception as e:
+        return JsonResponse({"detail": str(e)}, status=500)
+
+
+def api_program_costs(request):
+    """GET /api/catalog/program-costs
+    Query params: program_code, q (search name/institution), page, page_size
+    Returns DB-backed ProgramCost rows with linked Program context when available.
+    """
+    try:
+        from catalog.models import ProgramCost, Program  # type: ignore
+        q = (request.GET.get("q") or "").strip().lower()
+        program_code = (request.GET.get("program_code") or "").strip()
+        page = max(1, int(request.GET.get("page", 1)))
+        page_size = max(1, min(50, int(request.GET.get("page_size", 20))))
+        qs = ProgramCost.objects.all().order_by("-updated_at")
+        if program_code:
+            qs = qs.filter(program_code=program_code)
+        rows = []
+        for pc in qs:
+            prog_norm = ""
+            inst_code = ""
+            if pc.program_id:
+                try:
+                    prog = Program.objects.only("normalized_name", "institution_id", "code").get(id=pc.program_id)
+                    prog_norm = prog.normalized_name
+                    inst_code = prog.institution.code if prog.institution_id else ""
+                except Exception:
+                    pass
+            item = {
+                "program_code": pc.program_code,
+                "program_name": pc.program_name,
+                "institution_name": pc.institution_name,
+                "amount": float(pc.amount) if pc.amount is not None else None,
+                "currency": pc.currency or "",
+                "source_id": pc.source_id or "",
+                "raw_cost": pc.raw_cost or "",
+                "program_normalized_name": prog_norm,
+                "institution_code": inst_code,
+                "updated_at": pc.updated_at.isoformat() if pc.updated_at else "",
+            }
+            if q:
+                hay = " ".join([
+                    item.get("program_name") or "",
+                    item.get("institution_name") or "",
+                    item.get("program_normalized_name") or "",
+                ]).lower()
+                if q not in hay:
+                    continue
+            rows.append(item)
+        total = len(rows)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return JsonResponse({
+            "count": total,
+            "page": page,
+            "page_size": page_size,
+            "results": rows[start:end],
+        })
+    except Exception as e:
+        return JsonResponse({"detail": str(e)}, status=500)
+
+
 def api_institutions(request):
     """GET /api/etl/institutions
     Query params: q, region, county
@@ -768,6 +867,8 @@ urlpatterns = [
     path('api/etl/institutions', api_institutions, name='api_institutions'),
     path('api/etl/fields', api_fields, name='api_fields'),
     path('api/etl/search', api_search, name='api_search'),
+    path('api/catalog/suffix-mapping', api_suffix_mapping, name='api_suffix_mapping'),
+    path('api/catalog/program-costs', api_program_costs, name='api_program_costs'),
     path('admin/etl/upload', admin_etl_upload, name='admin_etl_upload'),
     path('admin/etl/process', admin_etl_process, name='admin_etl_process'),
     path('admin/', admin.site.urls),

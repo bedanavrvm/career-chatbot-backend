@@ -265,17 +265,30 @@ SUBJ_RE = re.compile(r"(?P<subject>[A-Za-z.&\s]+?)(?:\s*A)?\((?P<code>\d[\s]?\d[
 
 
 def _parse_requirements(subject_cells: List[str]) -> Dict[str, Any]:
+    """Parse subject requirement cells into a lightweight JSON structure.
+
+    Improvements:
+    - Accept both commas and semicolons as token separators.
+    - Accept option separators '/' or 'OR'.
+    - Tolerant grade extraction: if no ':' present, treat as required with empty grade.
+    """
     text = ",".join([(c or "").replace("\n", " ").strip() for c in subject_cells if c]).strip(", ")
     if not text:
         return {}
     required: List[Dict[str, Any]] = []
     groups: List[Dict[str, Any]] = []
-    for token in [t.strip() for t in text.split(",") if t.strip()]:
-        if ":" not in token:
-            continue
-        left, grade = token.split(":", 1)
-        grade = grade.strip()
-        options = [o.strip() for o in left.split("/") if o.strip()]
+    # Split top-level tokens by comma or semicolon
+    tokens = [t.strip() for t in re.split(r"[;,]+", text) if t.strip()]
+    for token in tokens:
+        left = token
+        grade = ""
+        if ":" in token:
+            left, grade = token.split(":", 1)
+            grade = grade.strip()
+        # Split options by '/' or 'OR'
+        # Note: re.split with flags requires Python 3.11+; emulate by compiling
+        parts = re.split(r"/|\bor\b", left, flags=re.IGNORECASE)
+        options = [o.strip() for o in parts if o and o.strip()]
         opts: List[Dict[str, Any]] = []
         for opt in options:
             m = SUBJ_RE.search(opt)
@@ -283,7 +296,10 @@ def _parse_requirements(subject_cells: List[str]) -> Dict[str, Any]:
                 continue
             subj = re.sub(r"\s+", " ", m.group("subject").strip())
             code = re.sub(r"\s+", "", m.group("code"))
-            opts.append({"subject": subj, "code": code, "min_grade": grade})
+            item = {"subject": subj, "code": code}
+            if grade:
+                item["min_grade"] = grade
+            opts.append(item)
         if not opts:
             continue
         if len(opts) == 1:
