@@ -3,6 +3,7 @@ from typing import Dict, Any
 from django.conf import settings
 from .models import Session, Profile
 from . import nlp
+from .recommend import recommend_top_k
 
 
 @dataclass
@@ -92,26 +93,51 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
                  "I'll use this to tailor program recommendations next.")
         return TurnResult(reply=reply, next_state='summarize', confidence=conf, slots=slots, nlp_payload=analysis)
 
+    def recommend() -> TurnResult:
+        gtxt = ", ".join(f"{k}:{v}" for k, v in (prof.grades or {}).items()) or "(none)"
+        itxt = ", ".join(sorted((prof.traits or {}).keys())) or "(none)"
+        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5)
+        if recs:
+            lines = ["Top recommendations:"]
+            for i, r in enumerate(recs, 1):
+                lines.append(f"{i}. {r['program_name']} — {r['institution_name']} [{r['program_code']}]")
+            lines.append("")
+            lines.append("We can refine by region, cost, or mode. Try: 'filter by Nairobi' or 'rank by cost'.")
+            body = "\n".join(lines)
+        else:
+            body = "No strong matches yet. Share more interests or subjects to personalize results."
+        reply = ("Thanks! Here's what I have so far.\n"
+                 f"- Grades: {gtxt}\n"
+                 f"- Interests: {itxt}\n\n"
+                 f"{body}")
+        return TurnResult(reply=reply, next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
     # Transitions
     if state == 'greeting':
         if conf < threshold and not grades:
             return ask_for_grades()
+        if 'recommend' in intents or 'next' in intents or 'help' in intents:
+            return recommend()
         if grades:
             return ask_for_interests()
         return ask_for_grades()
 
     if state == 'collect_grades':
         if grades:
+            if 'recommend' in intents or 'next' in intents or 'help' in intents:
+                return recommend()
             return ask_for_interests()
         if conf < threshold:
             return ask_for_grades()
         return ask_for_interests()
 
     if state == 'collect_interests':
-        if traits or 'interests' in intents:
-            return summarize()
+        if 'recommend' in intents or 'next' in intents or 'help' in intents:
+            return recommend()
+        if traits or 'interests' in intents or conf >= threshold:
+            return recommend()
         if conf < threshold and not traits:
             return ask_for_interests()
-        return summarize()
+        return recommend()
 
-    return summarize()
+    return recommend()

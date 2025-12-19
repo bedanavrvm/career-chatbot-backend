@@ -105,6 +105,14 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
         intents.append('provide_grades')
     if any(w in s for w in ["interests", "like", "enjoy", "love", "prefer"]):
         intents.append('interests')
+    if any(w in s for w in ["help", "assist", "support"]):
+        intents.append('help')
+    if any(w in s for w in ["recommend", "suggest", "results", "options"]):
+        intents.append('recommend')
+    if any(w in s.split() for w in ["next", "go", "continue"]):
+        intents.append('next')
+    if any(w in s for w in ["grade", "grades", "kcse"]):
+        intents.append('ask_grades')
     return intents
 
 
@@ -120,7 +128,10 @@ def analyze(text: str) -> Dict[str, Any]:
     """End-to-end NLP analysis with optional Gemini provider.
     Returns dict with keys: grades, traits, intents, confidence.
     """
-    provider = (getattr(settings, 'NLP_PROVIDER', 'local') or 'local').strip().lower()
+    # Default provider: gemini if API key present and provider not explicitly set; else local
+    prov_env = getattr(settings, 'NLP_PROVIDER', '') or ''
+    api_key_env = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+    provider = (prov_env or ('gemini' if api_key_env else 'local')).strip().lower()
     if provider == 'gemini':
         api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
         model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
