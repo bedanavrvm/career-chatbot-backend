@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.conf import settings
 from .models import Session, Message, Profile
+from .fsm import next_turn
 
 
 def _now():
@@ -102,22 +103,29 @@ def post_message(request, session_id):
         um = Message(session=s, role='user', idempotency_key=idem)
         um.content = text
         um.fsm_state = s.fsm_state
+        # Compute next turn using FSM+NLP
+        tr = next_turn(s, text)
+        # Persist NLP payload on the user message for observability
+        um.nlp = tr.nlp_payload or {}
         um.save()
 
-        # Stub assistant logic (to be replaced by FSM+NLP integration):
-        # Echo with a basic acknowledgement and keep state for now.
-        reply_text = f"Thanks for your message: '{text}'. Let's continue."
-        am = Message(session=s, role='assistant', fsm_state=s.fsm_state)
-        am.content = reply_text
-        am.confidence = 1.0
+        # Update session state and slots
+        s.fsm_state = tr.next_state
+        s.slots = tr.slots
+        s.last_activity_at = _now()
+        s.save(update_fields=['fsm_state', 'slots', 'last_activity_at'])
+
+        # Assistant reply
+        am = Message(session=s, role='assistant', fsm_state=tr.next_state)
+        am.content = tr.reply
+        am.confidence = tr.confidence
+        am.nlp = tr.nlp_payload or {}
         am.save()
 
         s.last_activity_at = _now()
         s.save(update_fields=['last_activity_at'])
 
-        return JsonResponse({
-            'session': _serialize_session(s),
-        })
+        return JsonResponse({'session': _serialize_session(s)})
     except Exception as e:
         return JsonResponse({'detail': str(e)}, status=500)
 

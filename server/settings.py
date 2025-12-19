@@ -166,3 +166,11 @@ CONV_SESSION_TTL_MINUTES = int(os.getenv('CONV_SESSION_TTL_MINUTES', '60') or '6
 # Encryption key for PII at rest (Fernet URL-safe base64). If empty, plaintext will be stored.
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 PII_ENCRYPTION_KEY = os.getenv('PII_ENCRYPTION_KEY', '').strip()
+
+# --- NLP Settings ---
+# Confidence threshold for free-text parsing; below this we ask clarifying questions.
+NLP_MIN_CONFIDENCE = float(os.getenv('NLP_MIN_CONFIDENCE', '0.4') or '0.4')
+# NLP provider selection: 'local' (default lightweight) or 'gemini' (requires GEMINI_API_KEY)
+NLP_PROVIDER = (os.getenv('NLP_PROVIDER', 'local') or 'local').strip().lower()
+# Gemini API key (optional). If empty, local NLP is used.
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
