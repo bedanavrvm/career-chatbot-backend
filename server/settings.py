@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'catalog',
     'accounts',
+    'conversations',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -157,3 +158,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# --- Conversations Engine Settings ---
+# TTL for conversation sessions (in minutes)
+CONV_SESSION_TTL_MINUTES = int(os.getenv('CONV_SESSION_TTL_MINUTES', '60') or '60')
+
+# Encryption key for PII at rest (Fernet URL-safe base64). If empty, plaintext will be stored.
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+PII_ENCRYPTION_KEY = os.getenv('PII_ENCRYPTION_KEY', '').strip()

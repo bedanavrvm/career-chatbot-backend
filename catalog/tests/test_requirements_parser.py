@@ -10,12 +10,15 @@ class RequirementsParserTests(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         # Dynamically import the ETL module to access _parse_requirements
-        backend_dir = Path(__file__).resolve().parents[3]
-        etl_path = backend_dir / "backend" / "scripts" / "etl" / "kuccps" / "etl.py"
+        backend_dir = Path(__file__).resolve().parents[2]  # .../DELPHINE/backend
+        etl_path = backend_dir / "scripts" / "etl" / "kuccps" / "etl.py"
         spec = importlib.util.spec_from_file_location("kuccps_etl", str(etl_path))
-        cls.etl = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
-        spec.loader.exec_module(cls.etl)  # type: ignore
+        module = importlib.util.module_from_spec(spec)
+        # Register module to ensure dataclasses and annotations resolve __module__ properly
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)  # type: ignore
+        cls.etl = module
 
     def test_parse_requirements_semicolons_and_or(self):
         parse = self.etl._parse_requirements

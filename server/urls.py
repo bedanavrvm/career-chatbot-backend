@@ -871,5 +871,7 @@ urlpatterns = [
     path('api/catalog/program-costs', api_program_costs, name='api_program_costs'),
     path('admin/etl/upload', admin_etl_upload, name='admin_etl_upload'),
     path('admin/etl/process', admin_etl_process, name='admin_etl_process'),
+    # Conversations API
+    path('api/', include('conversations.urls')),
     path('admin/', admin.site.urls),
 ]

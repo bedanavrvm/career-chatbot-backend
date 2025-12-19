@@ -2215,14 +2215,25 @@ def dedup_programs(cfg: Config, inplace: bool = False) -> None:
                 ])
 
     # Build helper maps for final cleanup
+    # Institution canonical names: prefer mappings/institutions_meta.csv, then processed/institutions.csv
     inst_name_by_code: Dict[str, str] = {}
+    try:
+        meta_fp = MAPPINGS_DIR / "institutions_meta.csv"
+        if meta_fp.exists():
+            with open(meta_fp, encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    c = (r.get("institution_code") or "").strip(); n = (r.get("name") or "").strip()
+                    if c and n:
+                        inst_name_by_code[c] = n
+    except Exception:
+        pass
     try:
         inst_fp = cfg.processed_dir / "institutions.csv"
         if inst_fp.exists():
             with open(inst_fp, encoding="utf-8") as f:
                 for r in csv.DictReader(f):
                     c = (r.get("code") or "").strip(); n = (r.get("name") or "").strip()
-                    if c and n:
+                    if c and n and c not in inst_name_by_code:
                         inst_name_by_code[c] = n
     except Exception:
         pass
@@ -2305,7 +2316,8 @@ def dedup_programs(cfg: Config, inplace: bool = False) -> None:
             # Repairs: institution_name, course_suffix, name/normalized_name
             inst_code = (m.get("institution_code") or "").strip()
             inst_name = _strip_quotes(m.get("institution_name", ""))
-            if (not _looks_like_text(inst_name)) and inst_code and inst_code in inst_name_by_code:
+            # Always prefer canonical from institutions_meta.csv (or processed fallback) when code is known
+            if inst_code and inst_code in inst_name_by_code:
                 inst_name = inst_name_by_code[inst_code]
             pc = (m.get("program_code") or m.get("code") or "").strip()
             digits = "".join(ch for ch in pc if ch.isdigit())
