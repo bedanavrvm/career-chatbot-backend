@@ -298,6 +298,32 @@ def _parse_requirements(subject_cells: List[str]) -> Dict[str, Any]:
     return out
 
 
+def _load_suffix_overrides_db() -> Dict[str, Dict[str, str]]:
+    """Optionally load course suffix overrides from DB (highest precedence).
+
+    Returns { suffix: {"normalized_name": str, "field_name": str} }.
+    If Django or the model is unavailable, returns empty mapping gracefully.
+    """
+    try:
+        setup_django()
+        from catalog.models import CourseSuffixMapping  # type: ignore
+        rows = CourseSuffixMapping.objects.filter(is_active=True).values(
+            "course_suffix", "normalized_name", "field_name"
+        )
+        out: Dict[str, Dict[str, str]] = {}
+        for r in rows:
+            sfx = (r.get("course_suffix") or "").strip()
+            if not sfx:
+                continue
+            out[sfx] = {
+                "normalized_name": (r.get("normalized_name") or "").strip(),
+                "field_name": (r.get("field_name") or "").strip(),
+            }
+        return out
+    except Exception:
+        return {}
+
+
 def _clean(cell: Optional[str]) -> str:
     return (cell or "").replace("\n", " ").replace("\r", " ").strip()
 
@@ -2170,11 +2196,23 @@ def dedup_programs(cfg: Config, inplace: bool = False) -> None:
         if cnt:
             canon_field_by_suffix[sfx] = cnt.most_common(1)[0][0]
 
-    # Apply admin overrides (if any)
+    # Apply admin overrides (CSV, if any)
     try:
         _ov = _load_suffix_overrides()
         if _ov:
             for sfx, vals in _ov.items():
+                if (vals.get("normalized_name") or "").strip():
+                    canon_name_by_suffix[sfx] = vals["normalized_name"].strip()
+                if (vals.get("field_name") or "").strip():
+                    canon_field_by_suffix[sfx] = vals["field_name"].strip()
+    except Exception:
+        pass
+
+    # Apply DB overrides (highest precedence)
+    try:
+        _ovdb = _load_suffix_overrides_db()
+        if _ovdb:
+            for sfx, vals in _ovdb.items():
                 if (vals.get("normalized_name") or "").strip():
                     canon_name_by_suffix[sfx] = vals["normalized_name"].strip()
                 if (vals.get("field_name") or "").strip():

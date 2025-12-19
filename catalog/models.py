@@ -393,3 +393,27 @@ class ProgramRequirementOption(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.group_id}:{self.subject_code or (self.subject.code if self.subject_id else '')} >= {self.min_grade}"
+
+
+# -----------------------------
+# Canonical course suffix map
+# -----------------------------
+
+class CourseSuffixMapping(TimestampedModel):
+    """Admin-managed canonical mapping for course_suffix.
+
+    Stores the canonical normalized program name and field name that a given
+    course_suffix should resolve to. The ETL uses this as an override layer
+    with highest precedence (falls back to CSV overrides and then heuristics).
+    """
+    course_suffix = models.CharField(max_length=16, unique=True)
+    normalized_name = models.CharField(max_length=255)
+    field_name = models.CharField(max_length=128, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["course_suffix"]
+
+    def __str__(self) -> str:
+        return f"{self.course_suffix} -> {self.normalized_name} ({self.field_name})"

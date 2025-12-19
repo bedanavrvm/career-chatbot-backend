@@ -19,6 +19,7 @@ from .models import (
     ProgramRequirementNormalized,
     ProgramRequirementGroup,
     ProgramRequirementOption,
+    CourseSuffixMapping,
 )
 
 
@@ -150,3 +151,10 @@ class ProgramRequirementGroupAdmin(admin.ModelAdmin):
 class ProgramRequirementOptionAdmin(admin.ModelAdmin):
     list_display = ("group", "order", "subject", "subject_code", "min_grade")
     search_fields = ("group__program__normalized_name", "subject__name", "subject_code", "min_grade")
+
+
+@admin.register(CourseSuffixMapping)
+class CourseSuffixMappingAdmin(admin.ModelAdmin):
+    list_display = ("course_suffix", "normalized_name", "field_name", "is_active", "updated_at")
+    search_fields = ("course_suffix", "normalized_name", "field_name")
+    list_filter = ("is_active",)
