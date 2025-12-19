@@ -6,7 +6,7 @@ from django.conf import settings
 
 # Canonical subject codes and common synonyms
 _SUBJECT_SYNONYMS = {
-    'math': 'MAT', 'mathematics': 'MAT', 'mat': 'MAT',
+    'math': 'MAT', 'mathematics': 'MAT', 'mat': 'MAT', 'mah': 'MAT',
     'english': 'ENG', 'eng': 'ENG', 'lang': 'ENG',
     'kiswahili': 'KIS', 'swahili': 'KIS', 'kisw': 'KIS', 'kis': 'KIS',
     'chemistry': 'CHE', 'chem': 'CHE',
@@ -30,6 +30,50 @@ _TOKEN_RE = re.compile(r"[A-Za-z+\-]+|\d+|[.,;:/]")
 def _norm_subject_token(tok: str) -> str:
     t = tok.strip().lower()
     return _SUBJECT_SYNONYMS.get(t, t.upper())
+
+
+def extract_catalog_lookup(text: str) -> Dict[str, Any]:
+    """Extract a catalog lookup query from free text.
+    Returns a dict like {'program_query': 'bachelor of arts', 'level': 'bachelor'} when detected; else {}.
+    This supports phrasings such as:
+      - "best universities that offer the course bachelor of arts"
+      - "which universities offer bachelor of science in computer science"
+      - "where can I study diploma in nursing"
+    """
+    s = (text or '').strip()
+    if not s:
+        return {}
+    low = s.lower()
+    # Quick gate: require an education-provider and offering verb context
+    if not (('universit' in low or 'college' in low or 'institute' in low) and ('offer' in low or 'study' in low or 'offers' in low)):
+        # Also allow direct degree phrases even without explicit 'offer'
+        if not re.search(r"\b(bachelor|masters?|diploma|certificate)\b", low):
+            return {}
+
+    # Capture explicit degree phrase first
+    m = re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
+    if m:
+        level = m.group(1).lower()
+        field = re.sub(r"\s+", " ", m.group(2)).strip()
+        prog = f"{level} of {field}".lower()
+        return {'program_query': prog, 'level': level}
+
+    # Fallback: after 'course' or 'program' tokens
+    m2 = re.search(r"\b(course|program|degree)\s+(in|on|of)?\s*([A-Za-z &/\-]+)$", s, flags=re.IGNORECASE)
+    if m2:
+        phrase = re.sub(r"\s+", " ", m2.group(3)).strip().lower()
+        # If phrase already contains level-like words, keep; else leave level empty
+        lvl = 'bachelor' if 'bachelor' in phrase else ('diploma' if 'diploma' in phrase else '')
+        return {'program_query': phrase, 'level': lvl}
+
+    # Fallback: after 'offer ...' capture remainder
+    m3 = re.search(r"offer[s]?\s+(the\s+)?(course|program|degree)?\s*([A-Za-z ].+)$", s, flags=re.IGNORECASE)
+    if m3:
+        phrase = re.sub(r"\s+", " ", m3.group(3)).strip().lower()
+        lvl = 'bachelor' if phrase.startswith('bachelor') else ('diploma' if phrase.startswith('diploma') else '')
+        return {'program_query': phrase, 'level': lvl}
+
+    return {}
 
 
 def extract_subject_grade_pairs(text: str) -> Dict[str, str]:
@@ -107,12 +151,15 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
         intents.append('interests')
     if any(w in s for w in ["help", "assist", "support"]):
         intents.append('help')
-    if any(w in s for w in ["recommend", "suggest", "results", "options"]):
+    if any(w in s for w in ["recommend", "suggest", "results", "options", "program", "programs", "career", "careers", "career path", "paths", "path", "job", "jobs", "profession", "occupations"]):
         intents.append('recommend')
     if any(w in s.split() for w in ["next", "go", "continue"]):
         intents.append('next')
     if any(w in s for w in ["grade", "grades", "kcse"]):
         intents.append('ask_grades')
+    # Catalog/program lookup intent: look for provider+offer phrasing or degree phrases
+    if (('universit' in s or 'college' in s or 'institute' in s) and ('offer' in s or 'offers' in s or 'study' in s)) or re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\b", s):
+        intents.append('catalog_lookup')
     return intents
 
 
@@ -138,18 +185,41 @@ def analyze(text: str) -> Dict[str, Any]:
         if api_key:
             try:
                 from .providers.gemini_provider import analyze_text  # type: ignore
-                return analyze_text(text, api_key=api_key, model_name=model_name)
-            except Exception:
-                # Fall back to local pipeline on any error
-                pass
+                out = analyze_text(text, api_key=api_key, model_name=model_name)
+                out['provider'] = 'gemini'
+                # Always enrich with local catalog lookup extraction for robustness
+                lookup = extract_catalog_lookup(text)
+                if lookup:
+                    out['lookup'] = lookup
+                    intents = [str(x) for x in (out.get('intents') or [])]
+                    if 'catalog_lookup' not in intents:
+                        intents.append('catalog_lookup')
+                        out['intents'] = intents
+                return out
+            except Exception as e:
+                fallback = {'provider': 'local', 'provider_error': str(e)}
+                grades = extract_subject_grade_pairs(text)
+                traits = extract_traits(text)
+                intents = detect_intents(text, grades)
+                lookup = extract_catalog_lookup(text)
+                if lookup and 'catalog_lookup' not in intents:
+                    intents.append('catalog_lookup')
+                conf = compute_confidence(grades, traits)
+                fallback.update({'grades': grades, 'traits': traits, 'intents': intents, 'confidence': conf, 'lookup': lookup})
+                return fallback
     # Local lightweight pipeline
     grades = extract_subject_grade_pairs(text)
     traits = extract_traits(text)
     intents = detect_intents(text, grades)
+    lookup = extract_catalog_lookup(text)
+    if lookup and 'catalog_lookup' not in intents:
+        intents.append('catalog_lookup')
     conf = compute_confidence(grades, traits)
     return {
         'grades': grades,
         'traits': traits,
         'intents': intents,
         'confidence': conf,
+        'provider': 'local',
+        'lookup': lookup,
     }

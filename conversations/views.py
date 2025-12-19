@@ -25,6 +25,7 @@ def _serialize_message(m: Message) -> Dict[str, Any]:
         'fsm_state': m.fsm_state,
         'confidence': m.confidence,
         'created_at': m.created_at.isoformat(),
+        'nlp': m.nlp or {},
     }
 
 
@@ -57,6 +58,24 @@ def get_session(request, session_id):
             s.save()
         _ensure_session_ttl(s)
         return JsonResponse(_serialize_session(s))
+    except Exception as e:
+        return JsonResponse({'detail': str(e)}, status=500)
+
+
+@csrf_exempt
+def delete_session(request, session_id):
+    """DELETE/POST /api/conversations/sessions/{id}/delete
+    Deletes a conversation session and its messages. Returns 204 on success.
+    """
+    if request.method not in ('DELETE', 'POST'):
+        return HttpResponseBadRequest('DELETE or POST required')
+    try:
+        try:
+            s = Session.objects.get(id=session_id)
+        except Session.DoesNotExist:
+            return JsonResponse({}, status=204)
+        s.delete()
+        return JsonResponse({}, status=204)
     except Exception as e:
         return JsonResponse({'detail': str(e)}, status=500)
 
