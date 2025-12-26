@@ -190,7 +190,8 @@ def _score_by_traits(name: str, field_name: str, traits: Dict[str, float]) -> fl
             continue
         hints = TRAIT_FIELD_HINTS.get(str(trait), [])
         hits = sum(1 for h in hints if str(h).lower() in text)
-        score += w * (0.5 + 0.5 * min(1.0, float(hits)))
+        if hits > 0:
+            score += w
     return float(score)
 
 def _eligibility_checker():
@@ -420,17 +421,51 @@ def lookup_institutions_by_region(region: str, limit: int = 30) -> List[Dict[str
 
     return []
 
-def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int = 5) -> List[Dict[str, Any]]:
+def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '') -> List[Dict[str, Any]]:
     if Program is None:
         return []
     try:
         qs = Program.objects.select_related('institution', 'field').filter(level='bachelor')
-        qs = qs.order_by('normalized_name')[:2000]
     except Exception:
         return []
 
     scored: List[Tuple[float, Any]] = []
-    for p in qs:
+
+    traits_sorted: List[Tuple[str, float]] = []
+    for t, v in (traits or {}).items():
+        try:
+            traits_sorted.append((str(t), float(v)))
+        except Exception:
+            traits_sorted.append((str(t), 0.0))
+    traits_sorted.sort(key=lambda kv: -kv[1])
+
+    toks2: List[str] = []
+    gt = (goal_text or '').strip().lower()
+    if gt:
+        toks = [t for t in ''.join((ch if ch.isalnum() else ' ') for ch in gt).split() if len(t) >= 4]
+        if toks:
+            stop = {'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work'}
+            toks2 = [t for t in toks if t not in stop]
+
+    if Q is not None and (traits_sorted or toks2):
+        hints: List[str] = []
+        for t, _w in traits_sorted[:3]:
+            hints.extend((TRAIT_FIELD_HINTS.get(t, []) or [])[:4])
+        if toks2:
+            hints.extend(toks2[:10])
+        hints = [h for h in hints if h and len(h) >= 3]
+        if hints:
+            q = Q()
+            for h in sorted(set(hints))[:10]:
+                q |= Q(normalized_name__icontains=h) | Q(name__icontains=h) | Q(field__name__icontains=h)
+            try:
+                narrowed = qs.filter(q)
+                if narrowed.exists():
+                    qs = narrowed
+            except Exception:
+                pass
+
+    for p in qs[:2000]:
         nm = (getattr(p, 'normalized_name', '') or getattr(p, 'name', '') or '').strip()
         if not nm:
             continue
@@ -443,10 +478,11 @@ def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int
         sc = _score_by_traits(nm, field_name, traits or {})
         if not traits and grades:
             sc += 0.2
-        # Keyword boost for space/rockets/astronomy/aerospace
-        txt = f"{nm} {field_name}".lower()
-        if any(kw in txt for kw in ['astronomy', 'astrophysics', 'space', 'aerospace', 'rocket', 'satellite', 'aviation']):
-            sc += 0.5
+        if toks2:
+            txt = f"{nm} {field_name}".lower()
+            hits2 = sum(1 for t in set(toks2[:12]) if t in txt)
+            if hits2 > 0:
+                sc += min(1.0, 0.25 * float(hits2))
         scored.append((float(sc), p))
 
     if not scored:
@@ -487,11 +523,11 @@ def _load_program_rows(limit: int = 0) -> List[Dict[str, str]]:
     return rows
 
 
-def recommend_top_k(grades: Dict[str, str], traits: Dict[str, float], k: int = 5) -> List[Dict[str, Any]]:
+def recommend_top_k(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '') -> List[Dict[str, Any]]:
     # Inline: Recommend top-K programs filtered by eligibility (when available) and scored by traits
     try:
         if Program is not None:
-            out_db = _recommend_top_k_db(grades or {}, traits or {}, k=k)
+            out_db = _recommend_top_k_db(grades or {}, traits or {}, k=k, goal_text=goal_text)
             if out_db:
                 return out_db
     except Exception:

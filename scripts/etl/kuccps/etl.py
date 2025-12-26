@@ -1045,10 +1045,23 @@ def transform_normalize(cfg: Config) -> None:
                 return "BBIT"
             if "BACHELOR OF INFORMATION TECHNOLOGY" in s:
                 return "BIT"
+            if "BACHELOR OF ECONOMICS" in s:
+                return "BEcon"
+            if "ACTUARIAL SCIENCE" in s:
+                return "BActSc"
+            if "BACHELOR OF MUSIC" in s:
+                return "BMus"
             if "BACHELOR OF SCIENCE" in s:
                 return "BSc"
             if "BACHELOR OF ARTS" in s:
                 return "BA"
+            tail = s.replace("BACHELOR OF", "", 1).strip()
+            tail = re.sub(r"[^A-Z0-9]+", " ", tail)
+            parts = [p for p in tail.split() if p and p not in {"OF", "IN", "AND", "WITH", "THE"}]
+            if parts:
+                initials = "".join(p[0] for p in parts[:4] if p)
+                if initials:
+                    return "B" + initials
         return ""
 
     # Update rows
@@ -1590,10 +1603,23 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         return "BBIT"
                     if "BACHELOR OF INFORMATION TECHNOLOGY" in s:
                         return "BIT"
+                    if "BACHELOR OF ECONOMICS" in s:
+                        return "BEcon"
+                    if "ACTUARIAL SCIENCE" in s:
+                        return "BActSc"
+                    if "BACHELOR OF MUSIC" in s:
+                        return "BMus"
                     if "BACHELOR OF SCIENCE" in s:
                         return "BSc"
                     if "BACHELOR OF ARTS" in s:
                         return "BA"
+                    tail = s.replace("BACHELOR OF", "", 1).strip()
+                    tail = re.sub(r"[^A-Z0-9]+", " ", tail)
+                    parts = [p for p in tail.split() if p and p not in {"OF", "IN", "AND", "WITH", "THE"}]
+                    if parts:
+                        initials = "".join(p[0] for p in parts[:4] if p)
+                        if initials:
+                            return "B" + initials
                 return ""
             with open(prog_path, encoding="utf-8") as f:
                 # Loader notes:

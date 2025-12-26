@@ -28,6 +28,17 @@ try:
 except Exception:
     retrieve_catalog_documents = None  # type: ignore
 
+try:
+    from scripts.etl.kuccps.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
+    from scripts.etl.kuccps.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
+    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
+    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
+except Exception:
+    _SUBJECT_CODE_ALIASES = {}
+    _SUBJECT_CANON_TO_NUM = {}
+    _SUBJECT_TOKEN_ALIASES = {}
+    _SUBJECT_TOKEN_CANON_TO_ALIASES = {}
+
 
 @dataclass
 class TurnResult:
@@ -239,6 +250,26 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
     if prof.traits:
         slots['traits'] = prof.traits
 
+    low = (user_text or '').strip().lower()
+    if isinstance(intents, list) and 'programs_near_me' not in intents:
+        try:
+            import re
+            m = re.search(r"\bfilter\s+by\s+([a-z][a-z\s\-]{1,40})\b", low)
+            if not m:
+                m = re.search(r"\bnear\s+([a-z][a-z\s\-]{1,40})\b", low)
+            region_txt = (m.group(1) if m else '').strip() if m else ''
+            if region_txt:
+                prefs = prof.preferences or {}
+                if not isinstance(prefs, dict):
+                    prefs = {}
+                if region_txt not in {'home', 'my home', 'home location', 'my home location'}:
+                    prefs['region'] = region_txt
+                    prof.preferences = prefs
+                    prof.save(update_fields=['preferences', 'updated_at'])
+                intents = list(intents) + ['programs_near_me']
+        except Exception:
+            pass
+
     def _get_career_goals() -> List[str]:
         try:
             prefs = prof.preferences or {}
@@ -293,10 +324,24 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
 
         gmap: Dict[str, str] = {}
         for k, v in (grades_map or {}).items():
-            kk = str(k).strip().upper()
+            kk = str(k).strip().upper().replace(' ', '')
             vv = _norm_grade(v)
-            if kk and vv:
-                gmap[kk] = vv
+            if not kk or not vv:
+                continue
+            canon = str(_SUBJECT_TOKEN_ALIASES.get(kk) or kk).strip().upper().replace(' ', '')
+            gmap[kk] = vv
+            if canon:
+                gmap[canon] = vv
+                for a in (_SUBJECT_TOKEN_CANON_TO_ALIASES.get(canon) or []):
+                    aa = str(a or '').strip().upper().replace(' ', '')
+                    if aa:
+                        gmap[aa] = vv
+            if kk in _SUBJECT_CODE_ALIASES:
+                gmap[str(_SUBJECT_CODE_ALIASES.get(kk) or '').strip().upper()] = vv
+            if kk in _SUBJECT_CANON_TO_NUM:
+                gmap[str(_SUBJECT_CANON_TO_NUM.get(kk) or '').strip().upper()] = vv
+            if canon in _SUBJECT_CANON_TO_NUM:
+                gmap[str(_SUBJECT_CANON_TO_NUM.get(canon) or '').strip().upper()] = vv
 
         missing: List[str] = []
         unmet_groups = 0
@@ -395,7 +440,9 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         gtxt = ", ".join(f"{k}:{v}" for k, v in (prof.grades or {}).items()) or "(none)"
         tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
         itxt = ", ".join(list(tuse.keys())) or "(none)"
-        recs = recommend_top_k(prof.grades or {}, tuse or {}, k=5)
+        goals = _get_career_goals()
+        goal_text = " ".join([g for g in goals if str(g).strip()]).strip()
+        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text)
         # Persist the last recommendation set for follow-ups like "Why?" and "Which do I qualify for?"
         try:
             slots['last_recommendations'] = [
@@ -610,8 +657,11 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
             except Exception:
                 by_id = {}
 
-        lines = ["Eligibility for the last recommended programs:"]
-        for i, r in enumerate(last[:5], 1):
+        eligible_rows: List[Tuple[str, Dict[str, Any]]] = []
+        unknown_titles: List[str] = []
+        not_eligible_missing: List[str] = []
+
+        for r in last[:5]:
             if not isinstance(r, dict):
                 continue
             pid = r.get('program_id')
@@ -626,24 +676,98 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 prog = None
 
             if prog is None:
-                lines.append(f"{i}. {title}: Unknown (program details not found)")
+                unknown_titles.append(title)
                 continue
 
             elig = _eligibility_for_program(prog, grades_map)
             ok = elig.get('eligible')
             missing = elig.get('missing') or []
             if ok is True:
-                lines.append(f"{i}. {title}: Eligible")
+                eligible_rows.append((title, r))
             elif ok is False:
                 if missing:
-                    lines.append(f"{i}. {title}: Not eligible (missing: {', '.join([str(x) for x in missing[:4]])})")
-                else:
-                    lines.append(f"{i}. {title}: Not eligible")
+                    not_eligible_missing.extend([str(x) for x in missing[:3]])
             else:
-                lines.append(f"{i}. {title}: Unknown (requirements not available)")
+                unknown_titles.append(title)
 
-        lines.append("")
-        lines.append("If you want, tell me which one you prefer and I can suggest similar options you qualify for.")
+        lines: List[str] = []
+        if eligible_rows:
+            lines.append("You qualify for:")
+            for i, (title, _r) in enumerate(eligible_rows[:5], 1):
+                lines.append(f"{i}. {title}")
+            if unknown_titles:
+                lines.append("")
+                lines.append("Some programs couldn't be eligibility-checked because requirements are missing in the catalog.")
+        else:
+            lines.append("You don't currently qualify for any of the last recommended programs based on your saved grades.")
+            if not_eligible_missing:
+                uniq = []
+                seen = set()
+                for x in not_eligible_missing:
+                    k = str(x).strip().upper()
+                    if not k or k in seen:
+                        continue
+                    seen.add(k)
+                    uniq.append(str(x))
+                    if len(uniq) >= 5:
+                        break
+                if uniq:
+                    lines.append(f"Common missing requirements: {', '.join(uniq)}")
+
+            goals = _get_career_goals()
+            goal_text = " ".join([g for g in goals if str(g).strip()]).strip()
+            candidates = recommend_top_k(prof.grades or {}, prof.traits or {}, k=25, goal_text=goal_text)
+            cand_ids: List[int] = []
+            for c in (candidates or []):
+                try:
+                    pid = c.get('program_id') if isinstance(c, dict) else None
+                    if pid is not None:
+                        cand_ids.append(int(pid))
+                except Exception:
+                    continue
+
+            by_id2: Dict[int, Any] = {}
+            if cand_ids:
+                try:
+                    for p in Program.objects.filter(id__in=cand_ids).prefetch_related('requirement_groups', 'requirement_groups__options', 'requirement_groups__options__subject'):
+                        by_id2[int(p.id)] = p
+                except Exception:
+                    by_id2 = {}
+
+            suggested: List[str] = []
+            seen_titles = set([t.upper() for t in unknown_titles] + [t.upper() for t, _ in eligible_rows])
+            for c in (candidates or []):
+                if not isinstance(c, dict):
+                    continue
+                pid = c.get('program_id')
+                nm = (c.get('program_name') or '').strip()
+                inst = (c.get('institution_name') or '').strip()
+                title = f"{nm} — {inst}".strip(' -')
+                if not title or title.upper() in seen_titles:
+                    continue
+                prog = None
+                try:
+                    prog = by_id2.get(int(pid)) if pid is not None else None
+                except Exception:
+                    prog = None
+                if prog is None:
+                    continue
+                elig = _eligibility_for_program(prog, grades_map)
+                if elig.get('eligible') is True:
+                    suggested.append(title)
+                    seen_titles.add(title.upper())
+                if len(suggested) >= 5:
+                    break
+
+            if suggested:
+                lines.append("")
+                lines.append("Similar options you qualify for:")
+                for i, t in enumerate(suggested, 1):
+                    lines.append(f"{i}. {t}")
+            elif unknown_titles:
+                lines.append("")
+                lines.append("Some programs couldn't be checked because requirements are missing; open Program Details for full requirements.")
+
         return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
 
     def catalog_lookup() -> TurnResult:
