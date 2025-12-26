@@ -1017,6 +1017,40 @@ def transform_normalize(cfg: Config) -> None:
                 return m["field_name"]
         return ""
 
+    def infer_award(level_val: str, label: str) -> str:
+        lvl = (level_val or "").strip().lower()
+        s = (label or "").strip().upper()
+        if not s:
+            return ""
+        if lvl == "bachelor" and s.startswith("BACHELOR OF"):
+            if "BACHELOR OF MEDICINE" in s and "SURGERY" in s:
+                return "MBChB"
+            if "BACHELOR OF DENTAL" in s:
+                return "BDS"
+            if "BACHELOR OF PHARMACY" in s:
+                return "BPharm"
+            if "BACHELOR OF LAWS" in s or "BACHELOR OF LAW" in s:
+                return "LLB"
+            if "BACHELOR OF ARCHITECT" in s:
+                return "BArch"
+            if "BACHELOR OF ENGINEERING" in s:
+                return "BEng"
+            if "BACHELOR OF TECHNOLOGY" in s:
+                return "BTech"
+            if "BACHELOR OF EDUCATION" in s:
+                return "BEd"
+            if "BACHELOR OF COMMERCE" in s:
+                return "BCom"
+            if "BUSINESS INFORMATION TECHNOLOGY" in s:
+                return "BBIT"
+            if "BACHELOR OF INFORMATION TECHNOLOGY" in s:
+                return "BIT"
+            if "BACHELOR OF SCIENCE" in s:
+                return "BSc"
+            if "BACHELOR OF ARTS" in s:
+                return "BA"
+        return ""
+
     # Update rows
     rows_out: List[Dict[str, Any]] = []
     for r in rows:
@@ -1089,6 +1123,12 @@ def transform_normalize(cfg: Config) -> None:
                 (r.get("source_index") or "").strip(),
             ])
             continue
+
+        # award inference
+        if not (r.get("award") or "").strip():
+            inferred = infer_award(level_val, label)
+            if inferred:
+                r["award"] = inferred
 
         # field classification
         if not (r.get("field_name") or "").strip():
@@ -1522,6 +1562,39 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         if not prog_path.exists():
             prog_path = cfg.processed_dir / "programs.csv"
         if prog_path.exists():
+            def _infer_award(level_val: str, label: str) -> str:
+                lvl = (level_val or "").strip().lower()
+                s = (label or "").strip().upper()
+                if not s:
+                    return ""
+                if lvl == "bachelor" and s.startswith("BACHELOR OF"):
+                    if "BACHELOR OF MEDICINE" in s and "SURGERY" in s:
+                        return "MBChB"
+                    if "BACHELOR OF DENTAL" in s:
+                        return "BDS"
+                    if "BACHELOR OF PHARMACY" in s:
+                        return "BPharm"
+                    if "BACHELOR OF LAWS" in s or "BACHELOR OF LAW" in s:
+                        return "LLB"
+                    if "BACHELOR OF ARCHITECT" in s:
+                        return "BArch"
+                    if "BACHELOR OF ENGINEERING" in s:
+                        return "BEng"
+                    if "BACHELOR OF TECHNOLOGY" in s:
+                        return "BTech"
+                    if "BACHELOR OF EDUCATION" in s:
+                        return "BEd"
+                    if "BACHELOR OF COMMERCE" in s:
+                        return "BCom"
+                    if "BUSINESS INFORMATION TECHNOLOGY" in s:
+                        return "BBIT"
+                    if "BACHELOR OF INFORMATION TECHNOLOGY" in s:
+                        return "BIT"
+                    if "BACHELOR OF SCIENCE" in s:
+                        return "BSc"
+                    if "BACHELOR OF ARTS" in s:
+                        return "BA"
+                return ""
             with open(prog_path, encoding="utf-8") as f:
                 # Loader notes:
                 # - programs.csv is emitted as TSV by transform_normalize to avoid heavy quoting in JSON columns
@@ -1551,7 +1624,9 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                     if not inst:
                         logger.warning("Program row skipped (institution not found for code=%s)", inst_code)
                         continue
-                    fld = Field.objects.filter(name=field_name).first() if field_name else None
+                    fld = None
+                    if field_name:
+                        fld, _ = Field.objects.get_or_create(name=field_name)
                     level = row.get("level", "").strip().lower() or ProgramLevel.BACHELOR
                     normalized_name = (row.get("normalized_name") or row.get("name") or "").strip()
                     if not normalized_name:
@@ -1577,7 +1652,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         "name": (row.get("name") or "").strip(),
                         "region": (row.get("region") or "").strip(),
                         "duration_years": _as_int(row.get("duration_years")),
-                        "award": (row.get("award") or "").strip(),
+                        "award": (row.get("award") or "").strip() or _infer_award(level, normalized_name),
                         "mode": (row.get("mode") or "").strip(),
                         "subject_requirements": _safe_json(row.get("subject_requirements_json") or "{}"),
                     }

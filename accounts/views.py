@@ -168,9 +168,14 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
             'subjects_provided': 0,
             'top4_points': 0,
             'top7_points': 0,
+            'subjects': [],
+            'top4_subjects': [],
+            'top7_subjects': [],
+            'formula': None,
         }
 
     cand_pts = {}
+    norm_grades = {}
     for code, raw in grades.items():
         k = str(code or '').strip().upper().replace(' ', '')
         v = str(raw or '').strip().upper().replace(' ', '')
@@ -180,6 +185,7 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
             v = _kcse_normalize_grade(v) or ''
         if not v:
             continue
+        norm_grades[k] = v
         pts = 0
         if _kcse_grade_points:
             try:
@@ -212,11 +218,17 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
             'subjects_provided': 0,
             'top4_points': 0,
             'top7_points': 0,
+            'subjects': [],
+            'top4_subjects': [],
+            'top7_subjects': [],
+            'formula': None,
         }
 
-    all_pts_sorted = sorted(cand_pts.values(), reverse=True)
-    top4 = all_pts_sorted[:4]
-    top7 = all_pts_sorted[:7]
+    sorted_pairs = sorted(cand_pts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+    top4_pairs = sorted_pairs[:4]
+    top7_pairs = sorted_pairs[:7]
+    top4 = [int(v) for _k, v in top4_pairs]
+    top7 = [int(v) for _k, v in top7_pairs]
 
     r_sum = sum(top4)
     t_sum = sum(top7)
@@ -228,12 +240,30 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
     except Exception:
         cluster = 0.0
 
+    subjects = []
+    for k, pts in sorted_pairs:
+        subjects.append({
+            'subject_code': k,
+            'grade': (norm_grades.get(k) or ''),
+            'points': int(pts),
+        })
+
     return {
         'has_grades': True,
         'cluster_score': round(float(cluster), 3),
         'subjects_provided': len(cand_pts),
         'top4_points': int(r_sum),
         'top7_points': int(t_sum),
+        'subjects': subjects,
+        'top4_subjects': [k for k, _v in top4_pairs],
+        'top7_subjects': [k for k, _v in top7_pairs],
+        'formula': {
+            'r_sum': int(r_sum),
+            't_sum': int(t_sum),
+            'R': int(R),
+            'T': int(T),
+            'top_n': int(top_n),
+        },
     }
 
 

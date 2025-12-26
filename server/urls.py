@@ -27,6 +27,7 @@ import json
 import csv
 from pathlib import Path
 import sys
+import math
 import firebase_admin
 from firebase_admin import auth as fb_auth, credentials
 
@@ -205,6 +206,359 @@ def api_programs(request):
         })
         resp["ETag"] = etag
         return resp
+    except Exception as e:
+        return JsonResponse({"detail": str(e)}, status=500)
+
+
+def api_catalog_program_detail(request, program_id: int):
+    """GET /api/catalog/programs/<id>
+    Returns a DB-backed Program detail payload including institution info, costs, and all yearly cutoffs.
+    """
+    if request.method != "GET":
+        return HttpResponseBadRequest("GET required")
+    try:
+        try:
+            from catalog.models import Program, YearlyCutoff, ProgramCost, ProgramRequirementGroup  # type: ignore
+        except Exception:
+            Program = None  # type: ignore
+            YearlyCutoff = None  # type: ignore
+            ProgramCost = None  # type: ignore
+            ProgramRequirementGroup = None  # type: ignore
+
+        if Program is None:
+            return JsonResponse({"detail": "Catalog DB not available"}, status=503)
+
+        try:
+            pid = int(program_id)
+        except Exception:
+            return JsonResponse({"detail": "Invalid program id"}, status=400)
+
+        qs = Program.objects.select_related("institution", "field").prefetch_related(
+            "cutoffs",
+            "costs",
+            "requirement_groups",
+            "requirement_groups__options",
+            "requirement_groups__options__subject",
+        )
+        try:
+            p = qs.get(id=pid)
+        except Program.DoesNotExist:
+            return JsonResponse({"detail": "Program not found"}, status=404)
+
+        inst = getattr(p, "institution", None)
+        field = getattr(p, "field", None)
+
+        cutoffs = []
+        try:
+            for c in list(p.cutoffs.all().order_by("-year")):
+                cutoffs.append({
+                    "year": int(getattr(c, "year", 0) or 0),
+                    "cutoff": float(getattr(c, "cutoff", 0) or 0),
+                    "capacity": getattr(c, "capacity", None),
+                    "notes": (getattr(c, "notes", "") or ""),
+                })
+        except Exception:
+            cutoffs = []
+
+        costs = []
+        try:
+            # Include linked costs, plus any unlinked costs matched by program_code
+            linked = list(p.costs.all().order_by("-updated_at"))
+        except Exception:
+            linked = []
+        try:
+            extra = []
+            if ProgramCost is not None:
+                code = (getattr(p, "code", "") or "").strip()
+                if code:
+                    extra = list(ProgramCost.objects.filter(program_code=code, program__isnull=True).order_by("-updated_at")[:10])
+        except Exception:
+            extra = []
+
+        for pc in (linked + extra)[:20]:
+            try:
+                costs.append({
+                    "amount": float(pc.amount) if getattr(pc, "amount", None) is not None else None,
+                    "currency": (pc.currency or "") if hasattr(pc, "currency") else "",
+                    "raw_cost": (pc.raw_cost or "") if hasattr(pc, "raw_cost") else "",
+                    "source_id": (pc.source_id or "") if hasattr(pc, "source_id") else "",
+                    "updated_at": pc.updated_at.isoformat() if getattr(pc, "updated_at", None) else "",
+                })
+            except Exception:
+                continue
+
+        requirement_groups = []
+        try:
+            for g in list(p.requirement_groups.all().order_by("order").prefetch_related("options", "options__subject")):
+                opts = []
+                try:
+                    for opt in list(g.options.all().order_by("order")):
+                        subj_code = ""
+                        subj_name = ""
+                        try:
+                            if getattr(opt, "subject_id", None):
+                                subj_code = (opt.subject.code or "").strip().upper()
+                                subj_name = (opt.subject.name or "").strip()
+                        except Exception:
+                            subj_code = ""
+                            subj_name = ""
+                        if not subj_code:
+                            subj_code = (getattr(opt, "subject_code", "") or "").strip().upper()
+                        opts.append({
+                            "subject_code": subj_code,
+                            "subject_name": subj_name,
+                            "min_grade": (getattr(opt, "min_grade", "") or "").strip(),
+                            "order": int(getattr(opt, "order", 0) or 0),
+                        })
+                except Exception:
+                    opts = []
+                requirement_groups.append({
+                    "name": (getattr(g, "name", "") or "").strip(),
+                    "pick": int(getattr(g, "pick", 1) or 1),
+                    "order": int(getattr(g, "order", 0) or 0),
+                    "options": opts,
+                })
+        except Exception:
+            requirement_groups = []
+
+        req_preview = ""
+        try:
+            req_preview = p.requirements_preview() or ""
+        except Exception:
+            req_preview = ""
+
+        estimated_cluster_points = None
+        cluster_points_breakdown = None
+        try:
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            token = ''
+            if auth_header.startswith('Bearer '):
+                token = auth_header.split(' ', 1)[1]
+            if token:
+                decoded = fb_auth.verify_id_token(token)
+                uid = decoded.get('uid')
+                if uid:
+                    try:
+                        from accounts.models import UserProfile, OnboardingProfile  # type: ignore
+                    except Exception:
+                        UserProfile = None  # type: ignore
+                        OnboardingProfile = None  # type: ignore
+                    if UserProfile is not None and OnboardingProfile is not None:
+                        up = UserProfile.objects.filter(uid=str(uid)).first()
+                        ob = OnboardingProfile.objects.filter(user=up).first() if up else None
+                        hs = (ob.high_school or {}) if ob else {}
+                        grades = hs.get('subject_grades') or {}
+                        if isinstance(grades, dict) and grades:
+                            try:
+                                from scripts.etl.kuccps.grades import normalize_grade, grade_points, meets_min_grade  # type: ignore
+                            except Exception:
+                                normalize_grade = None  # type: ignore
+                                grade_points = None  # type: ignore
+                                meets_min_grade = None  # type: ignore
+
+                            def _norm_subj_key(s: str) -> str:
+                                return str(s or '').strip().upper().replace(' ', '')
+
+                            _SUBJ_ALIASES = {
+                                "ENGLISH": "ENG",
+                                "KISWAHILI": "KIS",
+                                "MATHEMATICS": "MAT",
+                                "MATH": "MAT",
+                                "BIOLOGY": "BIO",
+                                "CHEMISTRY": "CHE",
+                                "PHYSICS": "PHY",
+                                "HISTORY": "HIS",
+                                "HISTORYANDGOVERNMENT": "HIS",
+                                "GEOGRAPHY": "GEO",
+                                "CRE": "CRE",
+                                "CHRISTIANRELIGIOUSEDUCATION": "CRE",
+                                "IRE": "IRE",
+                                "ISLAMICRELIGIOUSEDUCATION": "IRE",
+                                "BUSINESSSTUDIES": "BST",
+                                "AGRICULTURE": "AGR",
+                                "COMPUTERSTUDIES": "CSC",
+                            }
+
+                            def _to_code(s: str) -> str:
+                                k = _norm_subj_key(s)
+                                return _SUBJ_ALIASES.get(k, k)
+
+                            pts_by_subj = {}
+                            grade_by_subj = {}
+                            for subj, raw_grade in grades.items():
+                                k = _to_code(subj)
+                                if not k:
+                                    continue
+                                g = str(raw_grade or '').strip().upper().replace(' ', '')
+                                if normalize_grade:
+                                    g = normalize_grade(g) or ''
+                                if not g:
+                                    continue
+                                pval = None
+                                if grade_points:
+                                    try:
+                                        pval = int(grade_points(g) or 0)
+                                    except Exception:
+                                        pval = 0
+                                if pval and pval > 0:
+                                    pts_by_subj[k] = int(pval)
+                                    grade_by_subj[k] = g
+
+                            if pts_by_subj:
+                                sorted_pairs = sorted(pts_by_subj.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+                                top7_pairs = sorted_pairs[:7]
+                                if len(top7_pairs) < 7:
+                                    cluster_points_breakdown = {
+                                        'reason': 'need_at_least_7_subjects',
+                                        'subjects_provided': int(len(sorted_pairs)),
+                                    }
+                                else:
+                                    t_sum = sum(int(v) for _k, v in top7_pairs)
+                                    T = 84
+
+                                    req = getattr(p, 'subject_requirements', None) or {}
+                                    cols = []
+                                    for item in (req.get('required', []) if isinstance(req, dict) else []):
+                                        cols.append({'pick': 1, 'options': [item], 'label': 'Required'})
+                                    for g in (req.get('groups', []) if isinstance(req, dict) else []):
+                                        cols.append({'pick': int(g.get('pick') or 1), 'options': (g.get('options') or []), 'label': 'Group'})
+                                    required_count = sum(max(1, int(c.get('pick') or 1)) for c in cols)
+                                    if not cols:
+                                        cluster_points_breakdown = {
+                                            'reason': 'insufficient_program_subject_data',
+                                            'required_count': 0,
+                                            'expected_required_count': 4,
+                                        }
+                                    elif required_count > 4:
+                                        cluster_points_breakdown = {
+                                            'reason': 'insufficient_program_subject_data',
+                                            'required_count': int(required_count),
+                                            'expected_required_count': 4,
+                                        }
+                                    else:
+                                        requirements_incomplete = required_count < 4
+
+                                        chosen = []
+                                        missing = []
+                                        col_idx = 1
+                                        for col in cols:
+                                            pick = max(1, int(col.get('pick') or 1))
+                                            options = col.get('options') if isinstance(col.get('options'), list) else []
+                                            scored = []
+                                            for opt in options:
+                                                subj = _to_code((opt.get('subject') or opt.get('subject_code') or ''))
+                                                if not subj:
+                                                    continue
+                                                if subj not in pts_by_subj:
+                                                    continue
+                                                min_g = str(opt.get('min_grade') or '').strip().upper().replace(' ', '')
+                                                if min_g and meets_min_grade:
+                                                    ok = meets_min_grade(grade_by_subj.get(subj, ''), min_g)
+                                                    if ok is not True:
+                                                        continue
+                                                scored.append((subj, int(pts_by_subj[subj]), min_g))
+
+                                            scored.sort(key=lambda x: (-x[1], x[0]))
+                                            picked = []
+                                            used = set(x['subject_code'] for x in chosen)
+                                            for cand in scored:
+                                                if cand[0] in used:
+                                                    continue
+                                                picked.append(cand)
+                                                used.add(cand[0])
+                                                if len(picked) >= pick:
+                                                    break
+                                            if len(picked) < pick:
+                                                missing.append({'column': col_idx, 'needed': pick, 'found': len(picked)})
+                                            for subj, pval, min_g in picked:
+                                                chosen.append({
+                                                    'column': col_idx,
+                                                    'subject_code': subj,
+                                                    'grade': grade_by_subj.get(subj, ''),
+                                                    'points': int(pval),
+                                                    'min_grade': min_g,
+                                                })
+                                            col_idx += 1
+
+                                        if chosen and not missing:
+                                            used_codes = set(x['subject_code'] for x in chosen)
+                                            filled_subjects = []
+                                            if len(chosen) < 4:
+                                                for k, v in sorted_pairs:
+                                                    if k in used_codes:
+                                                        continue
+                                                    chosen.append({
+                                                        'column': 0,
+                                                        'subject_code': k,
+                                                        'grade': grade_by_subj.get(k, ''),
+                                                        'points': int(v),
+                                                        'min_grade': '',
+                                                    })
+                                                    filled_subjects.append(k)
+                                                    used_codes.add(k)
+                                                    if len(chosen) >= 4:
+                                                        break
+
+                                            if len(chosen) == 4:
+                                                r_sum = sum(int(x['points']) for x in chosen)
+                                                R = 48
+                                                try:
+                                                    est = math.sqrt((r_sum / R) * (t_sum / T)) * 48
+                                                except Exception:
+                                                    est = 0.0
+                                                estimated_cluster_points = round(float(est), 3)
+                                                cluster_points_breakdown = {
+                                                    'requirements_incomplete': bool(requirements_incomplete),
+                                                    'filled_subjects': filled_subjects,
+                                                    't_sum': int(t_sum),
+                                                    'T': int(T),
+                                                    'r_sum': int(r_sum),
+                                                    'R': int(R),
+                                                    'selected_subjects': chosen,
+                                                    'top7_subjects': [{'subject_code': k, 'points': int(v), 'grade': grade_by_subj.get(k, '')} for k, v in top7_pairs],
+                                                }
+                                            else:
+                                                cluster_points_breakdown = {
+                                                    'reason': 'need_at_least_4_cluster_subjects',
+                                                    'selected_subjects': chosen,
+                                                }
+                                        elif chosen and missing:
+                                            cluster_points_breakdown = {
+                                                'reason': 'missing_required_subjects',
+                                                'missing': missing,
+                                                'selected_subjects': chosen,
+                                            }
+        except Exception:
+            estimated_cluster_points = None
+            cluster_points_breakdown = None
+
+        out = {
+            "id": int(getattr(p, "id", 0) or 0),
+            "program_code": (getattr(p, "code", "") or "").strip(),
+            "program_name": (getattr(p, "name", "") or "").strip(),
+            "normalized_name": (getattr(p, "normalized_name", "") or "").strip(),
+            "level": (getattr(p, "level", "") or "").strip(),
+            "campus": (getattr(p, "campus", "") or "").strip(),
+            "region": (getattr(p, "region", "") or "").strip(),
+            "duration_years": float(p.duration_years) if getattr(p, "duration_years", None) is not None else None,
+            "award": (getattr(p, "award", "") or "").strip(),
+            "mode": (getattr(p, "mode", "") or "").strip(),
+            "field_name": (field.name or "").strip() if getattr(p, "field_id", None) and field else "",
+            "estimated_cluster_points": estimated_cluster_points,
+            "cluster_points_breakdown": cluster_points_breakdown,
+            "institution": {
+                "code": (inst.code or "").strip() if inst else "",
+                "name": (inst.name or "").strip() if inst else "",
+                "region": (inst.region or "").strip() if inst else "",
+                "county": (inst.county or "").strip() if inst else "",
+                "website": (inst.website or "").strip() if inst else "",
+            },
+            "requirements_preview": req_preview,
+            "requirement_groups": requirement_groups,
+            "cutoffs": cutoffs,
+            "costs": costs,
+        }
+        return JsonResponse(out)
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 
@@ -887,6 +1241,7 @@ urlpatterns = [
     path('api/etl/search', api_search, name='api_search'),
     path('api/catalog/suffix-mapping', api_suffix_mapping, name='api_suffix_mapping'),
     path('api/catalog/program-costs', api_program_costs, name='api_program_costs'),
+    path('api/catalog/programs/<int:program_id>', api_catalog_program_detail, name='api_catalog_program_detail'),
     path('admin/etl/upload', admin_etl_upload, name='admin_etl_upload'),
     path('admin/etl/process', admin_etl_process, name='admin_etl_process'),
     # Conversations API
