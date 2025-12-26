@@ -25,7 +25,52 @@ import math
 import csv
 from pathlib import Path
 
-from grades import normalize_grade, grade_points, meets_min_grade
+try:
+    from .grades import normalize_grade, grade_points, meets_min_grade  # type: ignore
+except Exception:
+    try:
+        from grades import normalize_grade, grade_points, meets_min_grade  # type: ignore
+    except Exception:
+        import sys
+        _HERE = Path(__file__).resolve().parent
+        if str(_HERE) not in sys.path:
+            sys.path.append(str(_HERE))
+        from grades import normalize_grade, grade_points, meets_min_grade  # type: ignore
+
+
+SUBJECT_CODE_ALIASES: Dict[str, str] = {
+    '101': 'ENG',
+    '102': 'KIS',
+    '121': 'MAT',
+    '231': 'BIO',
+    '232': 'PHY',
+    '233': 'CHE',
+    '442': 'ART',
+    '451': 'CSC',
+    '501': 'FRE',
+    '502': 'GER',
+    '511': 'MUS',
+}
+
+
+SUBJECT_CANON_TO_NUM: Dict[str, str] = {v: k for k, v in SUBJECT_CODE_ALIASES.items()}
+
+
+SUBJECT_TOKEN_ALIASES: Dict[str, str] = {
+    'MATB': 'MAT',
+    'MUC': 'MUS',
+    'MUS': 'MUS',
+    'ARD': 'ART',
+    'ART': 'ART',
+    'CMP': 'CSC',
+    'CSC': 'CSC',
+    'COM': 'CSC',
+}
+
+
+SUBJECT_TOKEN_CANON_TO_ALIASES: Dict[str, List[str]] = {}
+for _alias, _canon in SUBJECT_TOKEN_ALIASES.items():
+    SUBJECT_TOKEN_CANON_TO_ALIASES.setdefault(_canon, []).append(_alias)
 
 
 def _norm_subject_token(s: str) -> str:
@@ -33,6 +78,28 @@ def _norm_subject_token(s: str) -> str:
     Examples: "M AT" -> "MAT"; "MU C" -> "MUC"; "MAT B" -> "MATB"
     """
     return (s or "").replace(" ", "").strip().upper()
+
+
+def _expand_candidate_grades(candidate_grades_raw: Dict[str, str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k, v in (candidate_grades_raw or {}).items():
+        key = _norm_subject_token(k)
+        g = normalize_grade(v)
+        if not key or not g:
+            continue
+        canon = SUBJECT_TOKEN_ALIASES.get(key, key)
+        out[key] = g
+        if canon:
+            out[canon] = g
+            for a in (SUBJECT_TOKEN_CANON_TO_ALIASES.get(canon) or []):
+                out[a] = g
+        if key in SUBJECT_CODE_ALIASES:
+            out[SUBJECT_CODE_ALIASES[key]] = g
+        if key in SUBJECT_CANON_TO_NUM:
+            out[SUBJECT_CANON_TO_NUM[key]] = g
+        if canon in SUBJECT_CANON_TO_NUM:
+            out[SUBJECT_CANON_TO_NUM[canon]] = g
+    return out
 
 
 def _best_group_picks(options: List[Dict[str, Any]], pick: int, candidate_grades: Dict[str, str]) -> Tuple[int, List[Tuple[str, str, int]], List[str]]:
@@ -203,13 +270,7 @@ def evaluate_eligibility(program_row: Dict[str, Any], candidate_grades_raw: Dict
       - candidate_grades_raw: mapping like {"ENG": "B+", "MAT": "A-", ...}
     Returns dict with keys: eligible(bool), reasons(list), used_points(list of (subject,grade,points)), cluster_points(int)
     """
-    # Normalize candidate grade map to canonical tokens and grades
-    candidate_grades: Dict[str, str] = {}
-    for k, v in (candidate_grades_raw or {}).items():
-        key = _norm_subject_token(k)
-        g = normalize_grade(v)
-        if key and g:
-            candidate_grades[key] = g
+    candidate_grades = _expand_candidate_grades(candidate_grades_raw or {})
 
     req_json = program_row.get("subject_requirements_json") or "{}"
     try:

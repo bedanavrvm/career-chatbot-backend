@@ -1,4 +1,6 @@
+import csv
 import re
+from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from django.conf import settings
 
@@ -16,7 +18,13 @@ _SUBJECT_SYNONYMS = {
     'geography': 'GEO', 'geo': 'GEO',
     'business': 'BUS', 'commerce': 'BUS', 'bus': 'BUS',
     'computer': 'COM', 'computing': 'COM', 'ict': 'COM', 'cs': 'COM',
-    'cre': 'CRE', 'ire': 'IRE', 'agric': 'AGR', 'agriculture': 'AGR',
+    'cre': 'CRE', 'ire': 'IRE', 'agric': 'AGR', 'agriculture': 'AGR', 'agr': 'AGR',
+    'music': 'MUS', 'mus': 'MUS', 'muc': 'MUS',
+    'german': 'GER', 'ger': 'GER',
+    'french': 'FRE', 'fre': 'FRE',
+    'woodwork': 'WWK', 'wood': 'WWK', 'wwk': 'WWK',
+    'art': 'ART', 'artanddesign': 'ART', 'design': 'ART', 'ard': 'ART',
+    'computers': 'CSC', 'computerstudies': 'CSC', 'comp': 'CSC', 'csc': 'CSC',
 }
 
 # Grades pattern (KCSE-like): A, A-, B+, B, B-, C+, C, C-, D+, D, E
@@ -39,16 +47,18 @@ def extract_catalog_lookup(text: str) -> Dict[str, Any]:
       - "best universities that offer the course bachelor of arts"
       - "which universities offer bachelor of science in computer science"
       - "where can I study diploma in nursing"
+      - "are there programs on music"
     """
     s = (text or '').strip()
     if not s:
         return {}
     low = s.lower()
-    # Quick gate: require an education-provider and offering verb context
+    # Quick gate: allow (a) provider+offer context, (b) explicit degree phrases,
+    # or (c) generic "programs/courses in|on|for <field>" questions.
     if not (('universit' in low or 'college' in low or 'institute' in low) and ('offer' in low or 'study' in low or 'offers' in low)):
-        # Also allow direct degree phrases even without explicit 'offer'
         if not re.search(r"\b(bachelor|masters?|diploma|certificate)\b", low):
-            return {}
+            if not re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+", low):
+                return {}
 
     # Capture explicit degree phrase first
     m = re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
@@ -72,6 +82,12 @@ def extract_catalog_lookup(text: str) -> Dict[str, Any]:
         phrase = re.sub(r"\s+", " ", m3.group(3)).strip().lower()
         lvl = 'bachelor' if phrase.startswith('bachelor') else ('diploma' if phrase.startswith('diploma') else '')
         return {'program_query': phrase, 'level': lvl}
+
+    # Generic: "programs/courses in|on|for <field>"
+    m4 = re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
+    if m4:
+        phrase = re.sub(r"\s+", " ", m4.group(3)).strip().lower()
+        return {'program_query': phrase, 'level': ''}
 
     return {}
 
@@ -120,7 +136,7 @@ def extract_subject_grade_pairs(text: str) -> Dict[str, str]:
 _RIASEC_KEYWORDS = {
     'Realistic': ['build', 'fix', 'tools', 'machines', 'outdoors', 'hands-on'],
     'Investigative': ['research', 'analyze', 'code', 'coding', 'compute', 'experiment', 'science'],
-    'Artistic': ['design', 'art', 'music', 'creative', 'write', 'draw'],
+    'Artistic': ['design', 'art', 'music', 'musical', 'instrument', 'instruments', 'creative', 'write', 'draw'],
     'Social': ['help', 'teach', 'care', 'community', 'volunteer'],
     'Enterprising': ['lead', 'business', 'sell', 'entrepreneur', 'startup', 'pitch'],
     'Conventional': ['organize', 'accounting', 'plan', 'data entry', 'schedule'],
@@ -140,10 +156,83 @@ def extract_traits(text: str) -> Dict[str, float]:
     return {k: v for k, v in scores.items() if v > 0}
 
 
+_KNOWN_REGIONS = [
+    'central',
+    'eastern',
+    'western',
+    'nairobi',
+    'coast',
+    'rift valley',
+    'nyanza',
+    'north eastern',
+]
+
+_COUNTIES_CACHE: List[str] = []
+
+
+def _backend_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _institutions_geo_path() -> Path:
+    return _backend_dir() / 'scripts' / 'etl' / 'kuccps' / 'mappings' / 'institutions_geo.csv'
+
+
+def _load_counties() -> List[str]:
+    global _COUNTIES_CACHE
+    if _COUNTIES_CACHE:
+        return _COUNTIES_CACHE
+    fp = _institutions_geo_path()
+    if not fp.exists():
+        _COUNTIES_CACHE = []
+        return _COUNTIES_CACHE
+    out: List[str] = []
+    seen = set()
+    try:
+        with open(fp, encoding='utf-8') as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                c = (row.get('county') or '').strip()
+                if not c:
+                    continue
+                key = c.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(c)
+    except Exception:
+        out = []
+    out.sort(key=lambda x: x.lower())
+    _COUNTIES_CACHE = out
+    return _COUNTIES_CACHE
+
+
+def extract_region_query(text: str) -> str:
+    """Extract a region name from user text (best-effort)."""
+    s = (text or '').strip().lower()
+    if not s:
+        return ''
+    for r in _KNOWN_REGIONS:
+        if r in s:
+            return r.title()
+    # County fallback (so queries like "universities in Kiambu" work)
+    s_clean = re.sub(r"[^a-z]+", "", s)
+    for c in _load_counties():
+        cl = (c or '').strip().lower()
+        if not cl:
+            continue
+        if cl in s:
+            return c
+        cl_clean = re.sub(r"[^a-z]+", "", cl)
+        if cl_clean and cl_clean in s_clean:
+            return c
+    return ''
+
+
 def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
     s = (text or '').lower()
     intents: List[str] = []
-    if any(w in s for w in ["hi", "hello", "hey"]):
+    if re.search(r"\b(hi|hello|hey)\b", s):
         intents.append('greeting')
     if grades:
         intents.append('provide_grades')
@@ -151,16 +240,89 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
         intents.append('interests')
     if any(w in s for w in ["help", "assist", "support"]):
         intents.append('help')
+    if re.search(r"\bwhy\b", s) or s.strip() in ('why?', 'why'):
+        intents.append('explain')
+    if any(k in s for k in ['qualify', 'qualified', 'qualification', 'eligible', 'eligibility']) or re.search(r"\bdo i qualify\b|\bam i eligible\b", s):
+        intents.append('qualify')
+    if re.search(r"\bcareer\s+paths?\b", s) or any(k in s for k in ['possible career', 'career options', 'career direction']):
+        intents.append('career_paths')
     if any(w in s for w in ["recommend", "suggest", "results", "options", "program", "programs", "career", "careers", "career path", "paths", "path", "job", "jobs", "profession", "occupations"]):
         intents.append('recommend')
+    if (
+        any(k in s for k in [
+            'near me', 'near my', 'nearby', 'close to my', 'close to', 'closest', 'around me', 'my home', 'home location'
+        ])
+        and any(k in s for k in ['program', 'programs', 'course', 'courses'])
+    ):
+        intents.append('programs_near_me')
     if any(w in s.split() for w in ["next", "go", "continue"]):
         intents.append('next')
     if any(w in s for w in ["grade", "grades", "kcse"]):
         intents.append('ask_grades')
     # Catalog/program lookup intent: look for provider+offer phrasing or degree phrases
-    if (('universit' in s or 'college' in s or 'institute' in s) and ('offer' in s or 'offers' in s or 'study' in s)) or re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\b", s):
+    if ((('universit' in s or 'college' in s or 'institute' in s) and ('offer' in s or 'offers' in s or 'study' in s))
+         or re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\b", s)
+         or re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+", s)
+         or any(k in s for k in [
+             'cutoff', 'cut off', 'cut-offs', 'points',
+             'requirements', 'requirement', 'cluster', 'subjects',
+             'fees', 'fee', 'tuition', 'cost', 'price'
+         ]
+        )
+    ):
         intents.append('catalog_lookup')
+
+    # Institutions-by-region intent: "universities in the central region"
+    if ('universit' in s or 'college' in s or 'institute' in s) and (('region' in s) or extract_region_query(s)):
+        intents.append('institutions_by_region')
     return intents
+
+
+def _normalize_intents(intents: Any) -> List[str]:
+    out: List[str] = []
+    if not intents:
+        return out
+    try:
+        items = list(intents) if isinstance(intents, (list, tuple, set)) else [intents]
+    except Exception:
+        items = [intents]
+
+    mapping = {
+        'recommendations': 'recommend',
+        'recommendation': 'recommend',
+        'career_path': 'recommend',
+        'career_paths': 'recommend',
+        'careerpath': 'recommend',
+        'careerpaths': 'recommend',
+        'career_guidance': 'recommend',
+        'career_guidance_recommendations': 'recommend',
+        'program_lookup': 'catalog_lookup',
+        'programs_lookup': 'catalog_lookup',
+        'catalog': 'catalog_lookup',
+        'universities_by_region': 'institutions_by_region',
+        'institutions_region': 'institutions_by_region',
+        'near_me': 'programs_near_me',
+        'nearby_programs': 'programs_near_me',
+        'programs_near_home': 'programs_near_me',
+        'ask_for_grades': 'ask_grades',
+        'eligibility': 'qualify',
+        'eligible': 'qualify',
+        'qualification': 'qualify',
+        'explanation': 'explain',
+        'why': 'explain',
+        'careerpaths': 'career_paths',
+        'career_pathing': 'career_paths',
+    }
+
+    for it in items:
+        s = str(it or '').strip().lower()
+        if not s:
+            continue
+        s = s.replace(' ', '_')
+        s = mapping.get(s, s)
+        if s not in out:
+            out.append(s)
+    return out
 
 
 def compute_confidence(grades: Dict[str, str], traits: Dict[str, float]) -> float:
@@ -171,14 +333,18 @@ def compute_confidence(grades: Dict[str, str], traits: Dict[str, float]) -> floa
     return min(1.0, 0.2 * g + 0.1 * t)
 
 
-def analyze(text: str) -> Dict[str, Any]:
+def analyze(text: str, provider_override: str = '') -> Dict[str, Any]:
     """End-to-end NLP analysis with optional Gemini provider.
     Returns dict with keys: grades, traits, intents, confidence.
     """
+    override = (provider_override or '').strip().lower()
+    if override not in ('local', 'gemini'):
+        override = ''
+
     # Default provider: gemini if API key present and provider not explicitly set; else local
     prov_env = getattr(settings, 'NLP_PROVIDER', '') or ''
     api_key_env = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
-    provider = (prov_env or ('gemini' if api_key_env else 'local')).strip().lower()
+    provider = (override or prov_env or ('gemini' if api_key_env else 'local')).strip().lower()
     if provider == 'gemini':
         api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
         model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
@@ -187,13 +353,34 @@ def analyze(text: str) -> Dict[str, Any]:
                 from .providers.gemini_provider import analyze_text  # type: ignore
                 out = analyze_text(text, api_key=api_key, model_name=model_name)
                 out['provider'] = 'gemini'
+                try:
+                    local_intents = detect_intents(text, out.get('grades') or {})
+                    intents = _normalize_intents(out.get('intents') or [])
+                    local_norm = _normalize_intents(local_intents)
+                    merged: List[str] = []
+                    for x in list(intents) + list(local_norm):
+                        if x and x not in merged:
+                            merged.append(x)
+                    out['intents'] = merged
+                except Exception:
+                    pass
                 # Always enrich with local catalog lookup extraction for robustness
                 lookup = extract_catalog_lookup(text)
                 if lookup:
                     out['lookup'] = lookup
-                    intents = [str(x) for x in (out.get('intents') or [])]
+                    intents = _normalize_intents(out.get('intents') or [])
                     if 'catalog_lookup' not in intents:
                         intents.append('catalog_lookup')
+                    out['intents'] = intents
+
+                # Enrich with region-based institutions lookup
+                reg = extract_region_query(text)
+                if reg:
+                    out['institutions_region'] = reg
+                    intents = _normalize_intents(out.get('intents') or [])
+                    lowtxt = (text or '').lower()
+                    if 'institutions_by_region' not in intents and ('universit' in lowtxt or 'college' in lowtxt or 'institute' in lowtxt):
+                        intents.append('institutions_by_region')
                         out['intents'] = intents
                 return out
             except Exception as e:
@@ -204,8 +391,12 @@ def analyze(text: str) -> Dict[str, Any]:
                 lookup = extract_catalog_lookup(text)
                 if lookup and 'catalog_lookup' not in intents:
                     intents.append('catalog_lookup')
+                reg = extract_region_query(text)
+                lowtxt = (text or '').lower()
+                if reg and 'institutions_by_region' not in intents and ('universit' in lowtxt or 'college' in lowtxt or 'institute' in lowtxt):
+                    intents.append('institutions_by_region')
                 conf = compute_confidence(grades, traits)
-                fallback.update({'grades': grades, 'traits': traits, 'intents': intents, 'confidence': conf, 'lookup': lookup})
+                fallback.update({'grades': grades, 'traits': traits, 'intents': intents, 'confidence': conf, 'lookup': lookup, 'institutions_region': reg})
                 return fallback
     # Local lightweight pipeline
     grades = extract_subject_grade_pairs(text)
@@ -214,6 +405,10 @@ def analyze(text: str) -> Dict[str, Any]:
     lookup = extract_catalog_lookup(text)
     if lookup and 'catalog_lookup' not in intents:
         intents.append('catalog_lookup')
+    reg = extract_region_query(text)
+    lowtxt = (text or '').lower()
+    if reg and 'institutions_by_region' not in intents and ('universit' in lowtxt or 'college' in lowtxt or 'institute' in lowtxt):
+        intents.append('institutions_by_region')
     conf = compute_confidence(grades, traits)
     return {
         'grades': grades,
@@ -222,4 +417,5 @@ def analyze(text: str) -> Dict[str, Any]:
         'confidence': conf,
         'provider': 'local',
         'lookup': lookup,
+        'institutions_region': reg,
     }

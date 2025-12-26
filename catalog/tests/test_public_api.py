@@ -40,6 +40,18 @@ class PublicApiTests(TestCase):
     def test_institutions_endpoint(self):
         tmp = self._setup_processed_dir()
         try:
+            try:
+                from catalog.models import Institution
+                Institution.objects.create(
+                    code="1170",
+                    name="MACHAKOS UNIVERSITY",
+                    alias="MKSU",
+                    region="Eastern",
+                    county="Machakos",
+                    website="https://mksu.ac.ke",
+                )
+            except Exception:
+                pass
             resp = self.client.get("/api/etl/institutions", {"q": "machakos"})
             self.assertEqual(resp.status_code, 200)
             data = resp.json()

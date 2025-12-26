@@ -362,32 +362,50 @@ def api_institutions(request):
     Reads processed/institutions.csv and returns filtered results.
     """
     try:
-        fp = _institutions_path()
-        if not fp.exists():
-            return JsonResponse({"detail": f"Institutions file not found at {fp}"}, status=500)
         q = (request.GET.get("q") or "").strip().lower()
-        region = (request.GET.get("region") or "").strip().lower()
-        county = (request.GET.get("county") or "").strip().lower()
-        rows_all, etag = _read_csv_cached(fp)
-        inm = request.META.get("HTTP_IF_NONE_MATCH")
-        if inm and inm == etag:
-            return HttpResponse(status=304)
-        rows = []
-        for row in rows_all:
-            name = (row.get("name") or "").lower()
-            alias = (row.get("alias") or "").lower()
-            reg = (row.get("region") or "").lower()
-            cty = (row.get("county") or "").lower()
-            if q and not (q in name or q in alias):
-                continue
-            if region and region != reg:
-                continue
-            if county and county != cty:
-                continue
-            rows.append(row)
-        resp = JsonResponse({"count": len(rows), "results": rows})
-        resp["ETag"] = etag
-        return resp
+        region = (request.GET.get("region") or "").strip()
+        county = (request.GET.get("county") or "").strip()
+
+        try:
+            from catalog.models import Institution  # type: ignore
+        except Exception:
+            Institution = None  # type: ignore
+
+        if Institution is None:
+            return JsonResponse({
+                "count": 0,
+                "results": [],
+                "detail": "Institution catalog database is not available.",
+            }, status=503)
+
+        try:
+            from django.db.models import Q
+        except Exception:
+            Q = None
+
+        qs = Institution.objects.all()
+        if q:
+            if Q is not None:
+                qs = qs.filter(Q(name__icontains=q) | Q(alias__icontains=q))
+            else:
+                qs = qs.filter(name__icontains=q)
+        if region:
+            qs = qs.filter(region__icontains=region)
+        if county:
+            qs = qs.filter(county__icontains=county)
+
+        total = int(qs.count())
+        if total <= 0:
+            return JsonResponse({
+                "count": 0,
+                "results": [],
+                "detail": "No institutions found in the catalog database. This usually means the database has not been populated yet. Run the ETL load step to populate Institution data.",
+            })
+
+        rows = list(qs.order_by("name")[:500].values(
+            "code", "name", "alias", "region", "county", "website",
+        ))
+        return JsonResponse({"count": total, "results": rows})
     except Exception as e:
         return JsonResponse({"detail": str(e)}, status=500)
 

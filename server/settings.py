@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from urllib.parse import urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -52,6 +53,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 ]
+
+_rag_use_pgvector = os.getenv('RAG_USE_PGVECTOR', '0').strip().lower() in ('1', 'true', 'yes')
+_db_url_for_apps = os.getenv('DATABASE_URL', '').strip()
+if _rag_use_pgvector and _db_url_for_apps:
+    # pgvector requires Postgres; DATABASE_URL indicates we use Postgres in this project.
+    INSTALLED_APPS.insert(0, 'django.contrib.postgres')
+    INSTALLED_APPS.insert(0, 'vectorstore')
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -101,8 +109,17 @@ WSGI_APPLICATION = 'server.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+RUNNING_TESTS = 'test' in sys.argv
+
 _db_url = os.getenv('DATABASE_URL', '').strip()
-if _db_url:
+if RUNNING_TESTS:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'test_db.sqlite3',
+        }
+    }
+elif _db_url:
     _p = urlparse(_db_url)
     DATABASES = {
         'default': {
@@ -176,3 +193,8 @@ NLP_PROVIDER = (os.getenv('NLP_PROVIDER', 'local') or 'local').strip().lower()
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
 # Gemini Model name (when using Gemini). Defaults to a fast model.
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip()
+
+# --- RAG / Vector Search Settings ---
+RAG_USE_PGVECTOR = _rag_use_pgvector and bool(_db_url_for_apps)
+RAG_EMBED_DIM = int(os.getenv('RAG_EMBED_DIM', '768') or '768')
+GEMINI_EMBEDDING_MODEL = (os.getenv('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001') or 'gemini-embedding-001').strip()

@@ -60,6 +60,7 @@ class Session(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     fsm_state = models.CharField(max_length=64, default='greeting')
     slots = models.JSONField(default=dict)
+    owner_uid = models.CharField(max_length=128, blank=True, default='', db_index=True)
     external_user_id_encrypted = models.TextField(blank=True, default='')
     idempotency_salt = models.CharField(max_length=64, blank=True, default='')
 

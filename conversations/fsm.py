@@ -1,13 +1,32 @@
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 from django.conf import settings
+try:
+    from django.db.models import Q
+except Exception:
+    Q = None
 from .models import Session, Profile
 from . import nlp
-from .recommend import recommend_top_k, infer_career_paths, lookup_institutions_for_program, suggest_program_titles
+from .recommend import recommend_top_k, infer_career_paths, lookup_institutions_for_program, lookup_institutions_by_region, suggest_program_titles
+try:
+    from accounts.models import UserProfile as _UserProfile, OnboardingProfile as _OnboardingProfile
+except Exception:
+    _UserProfile = None
+    _OnboardingProfile = None
 try:
     from .providers.gemini_provider import compose_answer as _gem_compose  # type: ignore
 except Exception:
     _gem_compose = None  # type: ignore
+
+try:
+    from .providers.gemini_provider import compose_rag_answer as _gem_rag_compose  # type: ignore
+except Exception:
+    _gem_rag_compose = None  # type: ignore
+
+try:
+    from .rag import retrieve_catalog_documents  # type: ignore
+except Exception:
+    retrieve_catalog_documents = None  # type: ignore
 
 
 @dataclass
@@ -31,19 +50,177 @@ def _ensure_profile(session: Session) -> Profile:
     return prof
 
 
-def next_turn(session: Session, user_text: str) -> TurnResult:
+def _top_traits(traits: Dict[str, float], limit: int = 3, min_weight: float = 0.15) -> Dict[str, float]:
+    items = []
+    for k, v in (traits or {}).items():
+        try:
+            items.append((str(k), float(v or 0.0)))
+        except Exception:
+            items.append((str(k), 0.0))
+    items.sort(key=lambda kv: -kv[1])
+    out: Dict[str, float] = {}
+    for k, v in items:
+        if v <= 0:
+            continue
+        if v < float(min_weight or 0.0):
+            continue
+        out[k] = v
+        if limit and len(out) >= int(limit):
+            break
+    return out
+
+
+_GRADE_POINTS = {
+    'A': 12,
+    'A-': 11,
+    'B+': 10,
+    'B': 9,
+    'B-': 8,
+    'C+': 7,
+    'C': 6,
+    'C-': 5,
+    'D+': 4,
+    'D': 3,
+    'D-': 2,
+    'E': 1,
+}
+
+
+def _norm_grade(g: str) -> str:
+    return str(g or '').strip().upper().replace(' ', '')
+
+
+def _meets_min_grade(candidate: str, minimum: str) -> bool:
+    c = _GRADE_POINTS.get(_norm_grade(candidate))
+    m = _GRADE_POINTS.get(_norm_grade(minimum))
+    if c is None or m is None:
+        return False
+    return int(c) >= int(m)
+
+
+def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
+    if not session or not prof:
+        return
+    uid = (getattr(session, 'owner_uid', '') or '').strip()
+    if not uid:
+        return
+    if _UserProfile is None or _OnboardingProfile is None:
+        return
+    try:
+        user = _UserProfile.objects.filter(uid=uid).first()
+        if not user:
+            return
+        ob = _OnboardingProfile.objects.filter(user=user).first()
+        if not ob:
+            return
+    except Exception:
+        return
+
+    traits: Dict[str, float] = {}
+    try:
+        scores = ob.riasec_scores or {}
+        if isinstance(scores, dict):
+            raw: List[Tuple[str, float]] = []
+            max_score = 0.0
+            min_score = 0.0
+            min_set = False
+            for k, v in scores.items():
+                try:
+                    fv = float(v or 0.0)
+                except Exception:
+                    continue
+                raw.append((str(k), fv))
+                if not min_set:
+                    min_score = fv
+                    min_set = True
+                if fv > max_score:
+                    max_score = fv
+                if fv < min_score:
+                    min_score = fv
+            rng = float(max_score - min_score)
+            if rng > 0:
+                tmp: List[Tuple[str, float]] = []
+                for k, fv in raw:
+                    tmp.append((k, max(0.0, min(1.0, (float(fv) - float(min_score)) / float(rng)))))
+                tmp.sort(key=lambda kv: -kv[1])
+                traits = {k: v for k, v in tmp[:4] if v and v > 0}
+    except Exception:
+        traits = {}
+
+    try:
+        hs = ob.high_school or {}
+        fav = hs.get('favorite_subjects') if isinstance(hs, dict) else None
+        if isinstance(fav, list) and fav:
+            more = nlp.extract_traits(' '.join([str(x) for x in fav if str(x).strip()]))
+            for k, v in (more or {}).items():
+                traits[k] = max(float(traits.get(k, 0.0)), float(v))
+    except Exception:
+        pass
+
+    prefs: Dict[str, Any] = {}
+    try:
+        uni = ob.universal or {}
+        if isinstance(uni, dict):
+            region = (uni.get('region') or '').strip()
+            if region:
+                prefs['region'] = region
+            raw_goals = uni.get('careerGoals') if isinstance(uni, dict) else None
+            if raw_goals is None:
+                raw_goals = uni.get('career_goals') if isinstance(uni, dict) else None
+            goals: List[str] = []
+            if isinstance(raw_goals, list):
+                goals = [str(x).strip() for x in raw_goals if str(x).strip()]
+            elif isinstance(raw_goals, str):
+                s = str(raw_goals).strip()
+                if s:
+                    parts = [p.strip() for p in s.replace('\n', ',').split(',')]
+                    goals = [p for p in parts if p]
+            if goals:
+                prefs['career_goals'] = goals
+    except Exception:
+        pass
+    try:
+        p2 = ob.preferences or {}
+        if isinstance(p2, dict):
+            for k, v in p2.items():
+                if k not in prefs:
+                    prefs[k] = v
+    except Exception:
+        pass
+
+    changed = False
+    if traits and not (prof.traits or {}):
+        prof.traits = traits
+        changed = True
+    if prefs:
+        curp = prof.preferences or {}
+        if not isinstance(curp, dict):
+            curp = {}
+        merged = dict(curp)
+        for k, v in prefs.items():
+            if k not in merged or not merged.get(k):
+                merged[k] = v
+        if merged != curp:
+            prof.preferences = merged
+            changed = True
+    if changed:
+        prof.save(update_fields=['traits', 'preferences', 'updated_at'])
+
+
+def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
     """Compute the next assistant reply/state from user_text using lightweight NLP.
     - Updates session slots and profile (grades/traits) deterministically.
     - Applies a confidence threshold to trigger clarifying prompts.
     States: greeting -> collect_grades -> collect_interests -> summarize
     """
-    analysis = nlp.analyze(user_text)
+    analysis = nlp.analyze(user_text, provider_override=provider_override)
     conf = float(analysis.get('confidence') or 0.0)
     grades = analysis.get('grades') or {}
     traits = analysis.get('traits') or {}
     intents = analysis.get('intents') or []
 
     prof = _ensure_profile(session)
+    _seed_profile_from_onboarding(session, prof)
     # Merge grades/traits into profile
     if grades:
         prof.grades = _merge_grades(prof.grades or {}, grades)
@@ -61,6 +238,105 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
         slots['grades'] = prof.grades
     if prof.traits:
         slots['traits'] = prof.traits
+
+    def _get_career_goals() -> List[str]:
+        try:
+            prefs = prof.preferences or {}
+        except Exception:
+            prefs = {}
+        raw = prefs.get('career_goals') if isinstance(prefs, dict) else None
+        if isinstance(raw, list):
+            return [str(x).strip() for x in raw if str(x).strip()]
+        if isinstance(raw, str) and str(raw).strip():
+            return [str(raw).strip()]
+        return []
+
+    def _why_reasons_for_rec(r: Dict[str, Any], tuse: Dict[str, float], goals: List[str]) -> List[str]:
+        nm = str(r.get('program_name') or '').strip()
+        field_name = str(r.get('field_name') or '').strip()
+        txt = f"{nm} {field_name}".lower()
+        reasons: List[str] = []
+
+        matches: List[str] = []
+        for trait, w in (tuse or {}).items():
+            try:
+                hints = nlp.TRAIT_FIELD_HINTS.get(str(trait), [])  # type: ignore[attr-defined]
+            except Exception:
+                from .recommend import TRAIT_FIELD_HINTS
+                hints = TRAIT_FIELD_HINTS.get(str(trait), [])
+            hits = [h for h in (hints or []) if str(h).lower() in txt]
+            if hits:
+                matches.append(f"{trait} ({', '.join(sorted(set([str(h).lower() for h in hits]))[:3])})")
+        if matches:
+            reasons.append("Matches your interests: " + "; ".join(matches[:2]))
+
+        if goals:
+            joined = ' '.join(goals).lower()
+            toks = [t for t in ''.join((ch if ch.isalnum() else ' ') for ch in joined).split() if len(t) >= 4]
+            stop = {'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work'}
+            toks2 = [t for t in toks if t not in stop]
+            hits2 = [t for t in sorted(set(toks2[:12])) if t in txt]
+            if hits2:
+                reasons.append("Matches your career goals: " + ", ".join(hits2[:4]))
+
+        if not reasons:
+            reasons.append("Good overall match based on your saved grades/traits.")
+        return reasons
+
+    def _eligibility_for_program(program: Any, grades_map: Dict[str, str]) -> Dict[str, Any]:
+        try:
+            groups = list(program.requirement_groups.all().order_by('order').prefetch_related('options', 'options__subject'))
+        except Exception:
+            groups = []
+        if not groups:
+            return {'eligible': None, 'missing': [], 'unmet_groups': 0}
+
+        gmap: Dict[str, str] = {}
+        for k, v in (grades_map or {}).items():
+            kk = str(k).strip().upper()
+            vv = _norm_grade(v)
+            if kk and vv:
+                gmap[kk] = vv
+
+        missing: List[str] = []
+        unmet_groups = 0
+        for grp in groups:
+            try:
+                pick = int(getattr(grp, 'pick', 1) or 1)
+            except Exception:
+                pick = 1
+            try:
+                opts = list(grp.options.all().order_by('order'))
+            except Exception:
+                opts = []
+            if not opts:
+                continue
+
+            satisfied = 0
+            grp_missing: List[str] = []
+            for opt in opts:
+                subj_code = ''
+                try:
+                    if getattr(opt, 'subject_id', None):
+                        subj_code = (opt.subject.code or '').strip().upper()
+                except Exception:
+                    subj_code = ''
+                if not subj_code:
+                    subj_code = (getattr(opt, 'subject_code', '') or '').strip().upper()
+                if not subj_code:
+                    continue
+                min_grade = _norm_grade(getattr(opt, 'min_grade', '') or '')
+                cand = gmap.get(subj_code, '')
+                if cand and (not min_grade or _meets_min_grade(cand, min_grade)):
+                    satisfied += 1
+                else:
+                    grp_missing.append(f"{subj_code} >= {min_grade}" if min_grade else subj_code)
+
+            if satisfied < pick:
+                unmet_groups += 1
+                missing.extend(grp_missing[: max(1, pick)])
+
+        return {'eligible': unmet_groups == 0, 'missing': missing, 'unmet_groups': unmet_groups}
 
     try:
         threshold = float(getattr(settings, 'NLP_MIN_CONFIDENCE', 0.4) or 0.4)
@@ -84,6 +360,17 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
             nlp_payload=analysis,
         )
 
+    def greet() -> TurnResult:
+        return TurnResult(
+            reply=("Hi! I can help you with KUCCPS program recommendations, cutoffs, and requirements. "
+                   "Tell me what you want to study or your career goal (e.g., 'Bachelor of Arts' or 'I want to do graphic design'). "
+                   "If you want eligibility-checked recommendations, I'll use your saved onboarding grades (if available) or ask for them."),
+            next_state='greeting',
+            confidence=conf,
+            slots=slots,
+            nlp_payload=analysis,
+        )
+
     def ask_for_interests() -> TurnResult:
         return TurnResult(
             reply=("Great, thanks. What subjects or activities do you enjoy? "
@@ -96,7 +383,8 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
 
     def summarize() -> TurnResult:
         gtxt = ", ".join(f"{k}:{v}" for k, v in (prof.grades or {}).items()) or "(none)"
-        itxt = ", ".join(sorted((prof.traits or {}).keys())) or "(none)"
+        tshow = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
+        itxt = ", ".join(list(tshow.keys())) or "(none)"
         reply = ("Thanks! Here's what I have so far.\n"
                  f"- Grades: {gtxt}\n"
                  f"- Interests: {itxt}\n"
@@ -105,17 +393,46 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
 
     def recommend() -> TurnResult:
         gtxt = ", ".join(f"{k}:{v}" for k, v in (prof.grades or {}).items()) or "(none)"
-        itxt = ", ".join(sorted((prof.traits or {}).keys())) or "(none)"
-        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5)
-        # Prepare potential program titles from career paths/traits
+        tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
+        itxt = ", ".join(list(tuse.keys())) or "(none)"
+        recs = recommend_top_k(prof.grades or {}, tuse or {}, k=5)
+        # Persist the last recommendation set for follow-ups like "Why?" and "Which do I qualify for?"
+        try:
+            slots['last_recommendations'] = [
+                {
+                    'program_id': r.get('program_id'),
+                    'program_code': r.get('program_code'),
+                    'program_name': r.get('program_name'),
+                    'institution_name': r.get('institution_name'),
+                    'field_name': r.get('field_name'),
+                    'level': r.get('level'),
+                    'score': r.get('score'),
+                }
+                for r in (recs or [])
+            ]
+        except Exception:
+            pass
+        # Prepare potential program titles from career paths/traits and saved career goals
         gem_paths_all = analysis.get('career_paths') or []
         if isinstance(gem_paths_all, list):
             paths_for_titles = [str(p).strip() for p in gem_paths_all if str(p).strip()]
         else:
             paths_for_titles = []
+        try:
+            prefs = prof.preferences or {}
+        except Exception:
+            prefs = {}
+        goals_raw = prefs.get('career_goals') if isinstance(prefs, dict) else None
+        goals: List[str] = []
+        if isinstance(goals_raw, list):
+            goals = [str(x).strip() for x in goals_raw if str(x).strip()]
+        elif isinstance(goals_raw, str) and str(goals_raw).strip():
+            goals = [str(goals_raw).strip()]
+        if goals:
+            paths_for_titles = goals + paths_for_titles
         if not paths_for_titles:
-            paths_for_titles = infer_career_paths(prof.traits or {})
-        program_titles = suggest_program_titles(paths_for_titles, prof.traits or {}, limit=8)
+            paths_for_titles = infer_career_paths(tuse or {})
+        program_titles = suggest_program_titles(paths_for_titles, tuse or {}, limit=8)
         if recs:
             lines = ["Top recommendations:"]
             for i, r in enumerate(recs, 1):
@@ -124,9 +441,10 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
             if program_titles:
                 lines.append("Programs that suit your interests:")
                 for i, nm in enumerate(program_titles[:6], 1):
-                    lines.append(f"- {nm}")
+                    lines.append(f"{i}. {nm}")
                 lines.append("")
             lines.append("We can refine by region, cost, or mode. Try: 'filter by Nairobi' or 'rank by cost'.")
+            lines.append("Ask: 'Why these recommendations?' or 'Which of these do I qualify for?'")
             body = "\n".join(lines)
         else:
             # Prefer Gemini-provided career paths if available; else fallback to local inference
@@ -134,7 +452,7 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
             if isinstance(gem_paths, list) and gem_paths:
                 paths = [str(p).strip() for p in gem_paths if str(p).strip()]
             else:
-                paths = infer_career_paths(prof.traits or {})
+                paths = infer_career_paths(tuse or {})
             if program_titles:
                 plines = ["Programs that suit your career paths:"]
                 for i, nm in enumerate(program_titles, 1):
@@ -153,13 +471,14 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
                 body = "No strong matches yet. Share more interests or subjects to personalize results."
         # If Gemini is the provider, let it compose a grounded answer using context
         provider = str(analysis.get('provider') or '').strip().lower()
-        if provider == 'gemini' and _gem_compose:
+        can_ground = bool(recs) or bool(program_titles)
+        if provider == 'gemini' and _gem_compose and can_ground:
             try:
                 api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
                 model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
                 context = {
                     'grades': prof.grades or {},
-                    'traits': prof.traits or {},
+                    'traits': tuse or {},
                     'career_paths': analysis.get('career_paths') or [],
                     'program_recommendations': recs or [],
                     'program_titles': program_titles or [],
@@ -185,74 +504,483 @@ def next_turn(session: Session, user_text: str) -> TurnResult:
                      f"{body}")
         return TurnResult(reply=reply, next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
 
+    def career_paths() -> TurnResult:
+        low = (user_text or '').lower()
+        if any(k in low for k in ['music', 'musician', 'singer', 'singing', 'composer', 'songwriter']):
+            paths = ['musician', 'composer', 'songwriter', 'music producer', 'sound engineer', 'music teacher']
+        else:
+            tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
+            paths = infer_career_paths(tuse or {}, limit=8)
+        if not paths:
+            return TurnResult(
+                reply="Tell me what you enjoy (e.g., music, design, science) and I will suggest possible career paths.",
+                next_state=state,
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+        lines = ["Possible career paths:"]
+        for i, p in enumerate(paths[:8], 1):
+            lines.append(f"{i}. {p}")
+        lines.append("")
+        lines.append("If you want, tell me your home region and I can suggest programs near you for any of these paths.")
+        return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
+    def explain() -> TurnResult:
+        low = (user_text or '').lower()
+        if any(k in low for k in ['asterisk', 'asterisks', 'clutter', 'cluttered', 'markdown', 'bullets', 'bullet']):
+            return TurnResult(
+                reply=(
+                    "That formatting came from markdown-style bullets in an earlier response. "
+                    "I will now output plain text lists (1., 2., 3.) so it stays clean in the chat."
+                ),
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        last = slots.get('last_recommendations')
+        if not isinstance(last, list) or not last:
+            return TurnResult(
+                reply="I can explain recommendations after I suggest programs. Ask me for recommendations first (or say what you want to study).",
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
+        goals = _get_career_goals()
+        lines = ["Why these were recommended:"]
+        for i, r in enumerate(last[:5], 1):
+            reasons = _why_reasons_for_rec(r or {}, tuse or {}, goals)
+            title = f"{r.get('program_name') or ''} — {r.get('institution_name') or ''}".strip(' -')
+            lines.append(f"{i}. {title}")
+            lines.append(f"   Reason: {reasons[0]}")
+        return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
+    def qualify() -> TurnResult:
+        grades_map = prof.grades or {}
+        if not isinstance(grades_map, dict) or not grades_map:
+            return TurnResult(
+                reply="To check eligibility, please share your KCSE grades (e.g., 'Math A-, English B+, Biology B').",
+                next_state='collect_grades',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        last = slots.get('last_recommendations')
+        if not isinstance(last, list) or not last:
+            return TurnResult(
+                reply="I can check eligibility for the programs I recommended last. Ask me for recommendations first, then say 'Which of these do I qualify for?'.",
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        try:
+            from catalog.models import Program  # type: ignore
+        except Exception:
+            Program = None  # type: ignore
+        if Program is None:
+            return TurnResult(
+                reply="I can't access the catalog database right now to check eligibility.",
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        ids: List[int] = []
+        for r in last:
+            try:
+                pid = r.get('program_id') if isinstance(r, dict) else None
+                if pid is not None:
+                    ids.append(int(pid))
+            except Exception:
+                continue
+        by_id: Dict[int, Any] = {}
+        if ids:
+            try:
+                for p in Program.objects.filter(id__in=ids).prefetch_related('requirement_groups', 'requirement_groups__options', 'requirement_groups__options__subject'):
+                    by_id[int(p.id)] = p
+            except Exception:
+                by_id = {}
+
+        lines = ["Eligibility for the last recommended programs:"]
+        for i, r in enumerate(last[:5], 1):
+            if not isinstance(r, dict):
+                continue
+            pid = r.get('program_id')
+            nm = (r.get('program_name') or '').strip()
+            inst = (r.get('institution_name') or '').strip()
+            title = f"{nm} — {inst}".strip(' -')
+
+            prog = None
+            try:
+                prog = by_id.get(int(pid)) if pid is not None else None
+            except Exception:
+                prog = None
+
+            if prog is None:
+                lines.append(f"{i}. {title}: Unknown (program details not found)")
+                continue
+
+            elig = _eligibility_for_program(prog, grades_map)
+            ok = elig.get('eligible')
+            missing = elig.get('missing') or []
+            if ok is True:
+                lines.append(f"{i}. {title}: Eligible")
+            elif ok is False:
+                if missing:
+                    lines.append(f"{i}. {title}: Not eligible (missing: {', '.join([str(x) for x in missing[:4]])})")
+                else:
+                    lines.append(f"{i}. {title}: Not eligible")
+            else:
+                lines.append(f"{i}. {title}: Unknown (requirements not available)")
+
+        lines.append("")
+        lines.append("If you want, tell me which one you prefer and I can suggest similar options you qualify for.")
+        return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
     def catalog_lookup() -> TurnResult:
         """Answer queries like 'best universities that offer Bachelor of Arts' from KUCCPS CSV."""
         lookup = (analysis.get('lookup') or {})
         program_query = (lookup.get('program_query') or '').strip()
         level = (lookup.get('level') or '').strip()
-        if not program_query:
+        qtext = program_query or user_text
+        if not qtext:
             return TurnResult(
-                reply=("I can look up universities offering a program. Please specify the program name, e.g., "
+                reply=("I can look up programs and universities in the catalog. Please specify a program name, e.g., "
                        "'Bachelor of Arts' or 'Diploma in Nursing'."),
                 next_state=state,
                 confidence=conf,
                 slots=slots,
                 nlp_payload=analysis,
             )
-        rows = lookup_institutions_for_program(program_query, level=level, limit=30)
-        if rows:
-            title_prog = program_query.title()
-            lines = [f"Universities offering {title_prog} (showing up to {len(rows)}):"]
-            for i, r in enumerate(rows, 1):
-                code = f" [{r['program_code']}]" if r.get('program_code') else ""
-                region = f" — {r['region']}" if r.get('region') else ""
-                lines.append(f"{i}. {r['institution_name']}{region}{code}")
-            lines.append("")
-            lines.append("You can refine by region, mode or ask for recommended picks.")
+
+        docs = []
+        if retrieve_catalog_documents:
+            try:
+                docs = retrieve_catalog_documents(qtext, level=level, limit=8)
+            except Exception:
+                docs = []
+
+        analysis['rag'] = {
+            'query': qtext,
+            'level': level,
+            'count': len(docs),
+            'sources': [d.get('meta') or {} for d in (docs or [])],
+        }
+
+        if not docs:
             return TurnResult(
-                reply="\n".join(lines),
-                next_state='recommend',
-                confidence=conf,
-                slots=slots,
-                nlp_payload=analysis,
-            )
-        else:
-            return TurnResult(
-                reply=(f"I couldn't find institutions for '{program_query}'. Try a different phrasing or level (e.g., 'bachelor', 'diploma')."),
+                reply=(f"I couldn't find catalog matches for '{qtext}'. Try a different phrasing or include the level (bachelor/diploma/certificate)."),
                 next_state=state,
                 confidence=conf,
                 slots=slots,
                 nlp_payload=analysis,
             )
 
+        provider = str(analysis.get('provider') or '').strip().lower()
+        if provider == 'gemini' and _gem_rag_compose:
+            try:
+                api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+                model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
+                composed = _gem_rag_compose(user_text, docs, api_key=api_key, model_name=model_name) if api_key else ''
+                if composed:
+                    return TurnResult(
+                        reply=composed,
+                        next_state='recommend',
+                        confidence=conf,
+                        slots=slots,
+                        nlp_payload=analysis,
+                    )
+            except Exception:
+                pass
+
+        low = (user_text or '').lower()
+        want_reqs = any(k in low for k in ['requirement', 'requirements', 'cluster', 'subjects'])
+        want_cutoff = any(k in low for k in ['cutoff', 'cut-offs', 'cut off', 'points'])
+        want_cost = any(k in low for k in ['cost', 'fee', 'fees', 'tuition', 'price'])
+
+        lines = ["Here are relevant catalog matches:"]
+        for d in docs:
+            meta = d.get('meta') or {}
+            cite = meta.get('citation') or d.get('citation') or ''
+            prog = meta.get('program_name') or ''
+            inst = meta.get('institution_name') or ''
+            code = meta.get('program_code') or ''
+            region = meta.get('region') or ''
+            campus = meta.get('campus') or ''
+            parts = [f"{prog} — {inst}"]
+            if region:
+                parts.append(region)
+            if campus:
+                parts.append(campus)
+            if code:
+                parts.append(f"[{code}]")
+            if cite:
+                parts.append(f"[{cite}]")
+            lines.append(f"- " + " · ".join([p for p in parts if p]))
+            if want_reqs and meta.get('requirements_preview'):
+                lines.append(f"  Reqs: {meta.get('requirements_preview')} [{cite}]" if cite else f"  Reqs: {meta.get('requirements_preview')}")
+            if want_cutoff and (meta.get('latest_cutoff') or {}).get('cutoff') is not None:
+                yc = meta.get('latest_cutoff') or {}
+                lines.append(f"  Cutoff {yc.get('year')}: {yc.get('cutoff')} [{cite}]" if cite else f"  Cutoff {yc.get('year')}: {yc.get('cutoff')}")
+            if want_cost and (meta.get('cost') or {}).get('amount') is not None:
+                pc = meta.get('cost') or {}
+                lines.append(f"  Cost: {pc.get('amount')} {pc.get('currency')} [{cite}]" if cite else f"  Cost: {pc.get('amount')} {pc.get('currency')}")
+
+        lines.append("")
+        lines.append("Ask a follow-up like: 'requirements for P1' or 'cutoff for P2'.")
+        return TurnResult(
+            reply="\n".join(lines),
+            next_state='recommend',
+            confidence=conf,
+            slots=slots,
+            nlp_payload=analysis,
+        )
+
+    def programs_near_me() -> TurnResult:
+        prefs = prof.preferences or {}
+        home = ''
+        if isinstance(prefs, dict):
+            raw = prefs.get('region')
+            home = str(raw or '').strip()
+        if not home:
+            return TurnResult(
+                reply="I can filter programs by your home location. What county/region are you in (e.g., Nairobi, Kiambu, Central)?",
+                next_state=state,
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        try:
+            from catalog.models import Program  # type: ignore
+        except Exception:
+            Program = None  # type: ignore
+        if Program is None:
+            return TurnResult(
+                reply="I can't access the catalog database right now, so I can't filter programs by your home location.",
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
+        goals: List[str] = []
+        try:
+            prefs2 = prof.preferences or {}
+        except Exception:
+            prefs2 = {}
+        goals_raw = prefs2.get('career_goals') if isinstance(prefs2, dict) else None
+        if isinstance(goals_raw, list):
+            goals = [str(x).strip() for x in goals_raw if str(x).strip()]
+        elif isinstance(goals_raw, str) and str(goals_raw).strip():
+            goals = [str(goals_raw).strip()]
+
+        try:
+            qs = Program.objects.select_related('institution', 'field').filter(level='bachelor')
+            if Q is not None:
+                qs = qs.filter(
+                    Q(region__icontains=home)
+                    | Q(institution__region__icontains=home)
+                    | Q(institution__county__icontains=home)
+                    | Q(campus__icontains=home)
+                )
+            else:
+                qs = qs.filter(region__icontains=home)
+        except Exception:
+            qs = []
+
+        picked = []
+        try:
+            for p in list(qs[:500]):
+                nm = (p.normalized_name or p.name or '').strip()
+                inst = (p.institution.name or '').strip() if getattr(p, 'institution_id', None) else ''
+                region = (p.region or '').strip() or (p.institution.region or '').strip() if getattr(p, 'institution_id', None) else ''
+                field_name = (p.field.name if getattr(p, 'field_id', None) else '') or ''
+                txt = f"{nm} {field_name}".lower()
+                sc = 0.0
+                for trait, w in (tuse or {}).items():
+                    try:
+                        hints = nlp.TRAIT_FIELD_HINTS.get(str(trait), [])  # type: ignore[attr-defined]
+                    except Exception:
+                        from .recommend import TRAIT_FIELD_HINTS
+                        hints = TRAIT_FIELD_HINTS.get(str(trait), [])
+                    hits = sum(1 for h in (hints or []) if str(h).lower() in txt)
+                    try:
+                        ww = float(w or 0.0)
+                    except Exception:
+                        ww = 0.0
+                    if hits > 0:
+                        sc += ww
+                if goals:
+                    joined = ' '.join(goals).lower()
+                    toks = [t for t in ''.join((ch if ch.isalnum() else ' ') for ch in joined).split() if len(t) >= 4]
+                    stop = {'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work'}
+                    toks2 = [t for t in toks if t not in stop]
+                    hits2 = sum(1 for t in set(toks2[:12]) if t in txt)
+                    if hits2 > 0:
+                        sc += min(1.0, 0.25 * float(hits2))
+                picked.append((float(sc), nm, inst, region))
+        except Exception:
+            picked = []
+
+        if not picked:
+            return TurnResult(
+                reply=f"I couldn't find catalog programs matching your home location ({home}). If you tell me a county/region name (e.g., Kiambu, Nairobi, Central), I can try again.",
+                next_state='recommend',
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        picked.sort(key=lambda x: (-x[0], x[1]))
+        top = picked[:5]
+        lines = [f"Here are programs offered close to your home location ({home}):"]
+        for i, (_sc, nm, inst, region) in enumerate(top, 1):
+            parts = [nm]
+            if inst:
+                parts.append(inst)
+            if region:
+                parts.append(region)
+            lines.append(f"{i}. " + " — ".join([p for p in parts if p]))
+        lines.append("")
+        lines.append("If you share a field (e.g., 'nursing' or 'engineering'), I can narrow it further.")
+        return TurnResult(
+            reply="\n".join(lines),
+            next_state='recommend',
+            confidence=conf,
+            slots=slots,
+            nlp_payload=analysis,
+        )
+
+    def institutions_by_region() -> TurnResult:
+        region = (analysis.get('institutions_region') or '').strip()
+        if not region:
+            return TurnResult(
+                reply="Which region are you interested in? For example: Central, Eastern, Rift Valley, Nairobi, Coast.",
+                next_state=state,
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        insts = []
+        try:
+            insts = lookup_institutions_by_region(region, limit=20)
+        except Exception:
+            insts = []
+
+        if not insts:
+            return TurnResult(
+                reply=(
+                    f"I couldn't find any universities/colleges for '{region}' in the catalog database. "
+                    "This usually means the database hasn't been populated with institution region/county data yet. "
+                    "If you're running this locally, run the ETL load step to populate the Institution tables."
+                ),
+                next_state=state,
+                confidence=conf,
+                slots=slots,
+                nlp_payload=analysis,
+            )
+
+        top_n = 3
+        low = (user_text or '').lower()
+        m = None
+        try:
+            import re
+            m = re.search(r"\b(\d+)\b", low)
+        except Exception:
+            m = None
+        if m:
+            try:
+                top_n = max(1, min(10, int(m.group(1))))
+            except Exception:
+                top_n = 3
+
+        lines = [f"Here are {min(top_n, len(insts))} institutions in {region}:"]
+        for i, r in enumerate(insts[:top_n], 1):
+            nm = (r.get('institution_name') or '').strip()
+            county = (r.get('county') or '').strip()
+            parts = [nm]
+            if county:
+                parts.append(county)
+            lines.append(f"{i}. " + " — ".join([p for p in parts if p]))
+
+        lines.append("")
+        lines.append("Ask a follow-up like: 'What programs do they offer for P1?' or 'Show universities in Nairobi'.")
+        return TurnResult(
+            reply="\n".join(lines),
+            next_state='recommend',
+            confidence=conf,
+            slots=slots,
+            nlp_payload=analysis,
+        )
+
     # Transitions
+    if 'explain' in intents:
+        return explain()
+    if 'qualify' in intents:
+        return qualify()
+    if 'career_paths' in intents:
+        return career_paths()
     if 'catalog_lookup' in intents:
         return catalog_lookup()
+    if 'institutions_by_region' in intents:
+        return institutions_by_region()
+    if 'programs_near_me' in intents:
+        return programs_near_me()
     if state == 'greeting':
         if 'catalog_lookup' in intents:
             return catalog_lookup()
-        if conf < threshold and not grades:
+        if 'institutions_by_region' in intents:
+            return institutions_by_region()
+        if 'recommend' in intents or 'next' in intents:
+            if prof.grades or prof.traits or (isinstance(prof.preferences, dict) and (prof.preferences.get('career_goals') or prof.preferences.get('region'))):
+                return recommend()
+            return ask_for_interests()
+        if 'ask_grades' in intents:
             return ask_for_grades()
-        if 'recommend' in intents or 'next' in intents or 'help' in intents:
-            return recommend()
         if grades:
             return ask_for_interests()
-        return ask_for_grades()
+        if traits or 'interests' in intents:
+            return ask_for_interests()
+        if 'help' in intents or 'greeting' in intents:
+            return greet()
+        return greet()
 
     if state == 'collect_grades':
         if 'catalog_lookup' in intents:
             return catalog_lookup()
+        if 'institutions_by_region' in intents:
+            return institutions_by_region()
+        if 'programs_near_me' in intents:
+            return programs_near_me()
+        if 'recommend' in intents or 'next' in intents or 'help' in intents or traits:
+            return recommend()
         if grades:
             if 'recommend' in intents or 'next' in intents or 'help' in intents:
                 return recommend()
             return ask_for_interests()
-        if conf < threshold:
+        if conf < threshold and not traits:
             return ask_for_grades()
         return ask_for_interests()
 
     if state == 'collect_interests':
         if 'catalog_lookup' in intents:
             return catalog_lookup()
+        if 'institutions_by_region' in intents:
+            return institutions_by_region()
+        if 'programs_near_me' in intents:
+            return programs_near_me()
         if 'recommend' in intents or 'next' in intents or 'help' in intents:
             return recommend()
         if traits or 'interests' in intents or conf >= threshold:

@@ -76,12 +76,35 @@ class OnboardingProfile(models.Model):
         """
         ans = self.riasec_answers or {}
         scores = {}
+        has_negative = False
         for code, arr in (ans.items() if isinstance(ans, dict) else []):
+            total = 0
             try:
-                total = sum(int(x) for x in (arr or []) if isinstance(x, (int, float)))
+                for x in (arr or []):
+                    if not isinstance(x, (int, float)):
+                        continue
+                    xi = int(x)
+                    if xi < 0:
+                        has_negative = True
+                    total += xi
             except Exception:
                 total = 0
             scores[str(code)] = int(total)
+
+        for k in ("Realistic", "Investigative", "Artistic", "Social", "Enterprising", "Conventional"):
+            if k not in scores:
+                scores[k] = 0
+
+        if has_negative:
+            base = 10
+            scores = {k: int(v) + base for k, v in scores.items()}
+            try:
+                min_v = min(int(v) for v in scores.values())
+            except Exception:
+                min_v = 0
+            if min_v < 0:
+                shift = -int(min_v)
+                scores = {k: int(v) + shift for k, v in scores.items()}
         # Persist ordered top 3
         tops = [k for k, _v in sorted(scores.items(), key=lambda kv: -kv[1])[:3]] if scores else []
         self.riasec_scores = scores
