@@ -190,7 +190,7 @@ def api_programs(request):
                 continue
             if level and level != level_val:
                 continue
-            if region and region != region_val:
+            if region and region not in region_val:
                 continue
             rows.append(row)
 
