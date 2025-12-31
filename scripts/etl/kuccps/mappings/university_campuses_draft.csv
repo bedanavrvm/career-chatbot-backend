@@ -1,0 +1,158 @@
+institution_code,institution_name,campus,is_main,town,county,region,source_url,notes
+
+1263,UNIVERSITY OF NAIROBI,MAIN,yes,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located in the Central Business District
+1263,UNIVERSITY OF NAIROBI,CHIROMO,no,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located off Riverside Drive
+1263,UNIVERSITY OF NAIROBI,LOWER KABETE,no,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located along Lower Kabete Road
+1263,UNIVERSITY OF NAIROBI,KIKUYU,no,Kikuyu,Kiambu,Central,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located near Kikuyu Town
+1263,UNIVERSITY OF NAIROBI,KENYATTA NATIONAL,no,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located within Kenyatta National Hospital
+1263,UNIVERSITY OF NAIROBI,PARKLANDS,no,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located in Parklands
+1263,UNIVERSITY OF NAIROBI,KENYA SCIENCE,no,Nairobi,Nairobi,Nairobi,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located along Ngong Road
+1263,UNIVERSITY OF NAIROBI,MOMBASA,no,Mombasa,Mombasa,Coast,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located in Mombasa County
+1263,UNIVERSITY OF NAIROBI,KISUMU,no,Kisumu,Kisumu,Nyanza,https://mombasa.uonbi.ac.ke/basic-page/international-students,Located in Kisumu County
+
+1057,EGERTON UNIVERSITY,MAIN CAMPUS - NJORO,yes,Njoro,Nakuru,Rift Valley,https://www.egerton.ac.ke/colleges-and-campuses,County/region inferred from town; page states main campus is based at Njoro
+1057,EGERTON UNIVERSITY,NAKURU CITY CAMPUS COLLEGE,no,Nakuru,Nakuru,Rift Valley,https://www.egerton.ac.ke/colleges-and-campuses,County/region inferred from town; page states located in Nakuru Town along the main Nakuru-Eldoret highway
+1057,EGERTON UNIVERSITY,KENYATTA CAMPUS - NJORO,no,Njoro,Nakuru,Rift Valley,https://www.egerton.ac.ke/colleges-and-campuses,County/region inferred from town; page states located 5 km from Njoro Campus
+1057,EGERTON UNIVERSITY,E-CAMPUS,no,Online,N/A,N/A,https://www.egerton.ac.ke/about-egerton-university/about-us/fact-sheet,Listed as a campus in Egerton University fact sheet
+1057,EGERTON UNIVERSITY,MPEKETONI CAMPUS,no,Mpeketoni,Lamu,Coast,https://www.egerton.ac.ke/university-news/egerton-university-council-makes-inaugural-tour-to-mpeketoni-campus-as-part-of-broader-strategy-to-assess-and-maximize-institutional-resources,Article states Mpeketoni Campus is in Lamu County
+
+1111,KENYATTA UNIVERSITY,MAIN CAMPUS,yes,Nairobi,Nairobi,Nairobi,https://ict.ku.ac.ke/contact-us/,Official KU ICT contact page lists physical address: "Kenyatta University Main Campus Thika road"
+1111,KENYATTA UNIVERSITY,CITY CAMPUS,no,Nairobi,Nairobi,Nairobi,https://citycampus.ku.ac.ke/,Contact section lists City Campus in Nairobi
+1111,KENYATTA UNIVERSITY,NAKURU CAMPUS,no,Nakuru,Nakuru,Rift Valley,https://nakurucampus.ku.ac.ke/,Contact section lists Nakuru Campus in Nakuru
+
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,MAIN CAMPUS (JUJA),yes,Juja,Kiambu,Central,https://www.jkuat.ac.ke/general-info/,County/region inferred from town; page states university is situated in Juja along Nairobi-Thika Highway
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,NAIROBI CBD CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.jkuat.ac.ke/contact-us/,Branch listed under "Our Campus Branches" section
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,KAREN CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.jkuat.ac.ke/contact-us/,Branch listed under "Our Campus Branches" section
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,MOMBASA CBD CAMPUS,no,Mombasa,Mombasa,Coast,https://www.jkuat.ac.ke/contact-us/,Branch listed under "Our Campus Branches" section
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,NAKURU CBD CAMPUS,no,Nakuru,Nakuru,Rift Valley,https://www.jkuat.ac.ke/contact-us/,Branch listed under "Our Campus Branches" section
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,WESTLANDS CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,Branch listed on official contact page (school site)
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,KISUMU CBD CAMPUS,no,Kisumu,Kisumu,Nyanza,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,Branch listed on official contact page (school site)
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,KITALE CBD CAMPUS,no,Kitale,Trans-Nzoia,Rift Valley,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,County/region inferred from town; branch listed on official contact page (school site)
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,KAKAMEGA CBD CAMPUS,no,Kakamega,Kakamega,Western,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,County/region inferred from town; branch listed on official contact page (school site)
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,KISII CBD CAMPUS,no,Kisii,Kisii,Nyanza,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,County/region inferred from town; branch listed on official contact page (school site)
+1249,JOMO KENYATTA UNIVERSITY OF AGRICULTURE AND TECHNOLOGY,ELDORET CBD CAMPUS,no,Eldoret,Uasin Gishu,Rift Valley,https://www.jkuat.ac.ke/school/medicine/?page_id=16657,County/region inferred from town; branch listed on official contact page (school site)
+
+1229,MASENO UNIVERSITY,MAIN CAMPUS (MASENO),yes,Maseno,Kisumu,Nyanza,https://www.maseno.ac.ke/maseno-brief,Campus list in official "Maseno in brief" page
+1229,MASENO UNIVERSITY,KISUMU CAMPUS,no,Kisumu,Kisumu,Nyanza,https://www.maseno.ac.ke/maseno-brief,Campus list in official "Maseno in brief" page
+1229,MASENO UNIVERSITY,ODERA AKANG'O CAMPUS (YALA),no,Yala,Siaya,Nyanza,https://www.maseno.ac.ke/maseno-brief,Campus list in official "Maseno in brief" page
+1229,MASENO UNIVERSITY,E-CAMPUS,no,Online,N/A,N/A,https://www.maseno.ac.ke/maseno-brief,Listed as eCampus (online) in official "Maseno in brief" page
+
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,MAIN CAMPUS (KAKAMEGA),yes,Kakamega,Kakamega,Western,https://mmust.ac.ke/mmust-profile/,Page states MMUST is located in Kakamega (Kakamega County)
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,NAIROBI ODEL CENTRE,no,Nairobi,Nairobi,Nairobi,https://mmust.ac.ke/campuses/,Campus listed on official MMUST campuses page; town inferred from campus name
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,KAKUMA CENTRE FOR REFUGEE STUDIES,no,Kakuma,Turkana,Rift Valley,https://mmust.ac.ke/campuses/,Centre listed on official MMUST campuses page; county/region inferred from town
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,WEBUYE TVET CAMPUS,no,Webuye,Bungoma,Western,https://mmust.ac.ke/campuses/,Campus listed on official MMUST campuses page; county/region inferred from town
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,BUTULA ODEL & TVET CENTRE,no,Butula,Busia,Western,https://mmust.ac.ke/campuses/,Centre listed on official MMUST campuses page; county/region inferred from town
+1082,MASINDE MULIRO UNIVERSITY OF SCIENCE & TECHNOLOGY,BUNGOMA CAMPUS,no,Bungoma,Bungoma,Western,https://mmust.ac.ke/campuses/,Campus listed on official MMUST campuses page; county/region inferred from town
+
+1279,MOUNT KENYA UNIVERSITY,THIKA MAIN CAMPUS,yes,Thika,Kiambu,Central,http://mku.ac.ke/thika-main-campus/,Page states campus is located along General Kago Road in Thika town (Kiambu County)
+1279,MOUNT KENYA UNIVERSITY,NAIROBI CAMPUS,no,Nairobi,Nairobi,Nairobi,http://mku.ac.ke/nairobi-campus/,Page states Nairobi Campus operates from locations along Moi Avenue
+1279,MOUNT KENYA UNIVERSITY,PARKLANDS LAW SCHOOL,no,Nairobi,Nairobi,Nairobi,https://plc.mku.ac.ke/contact-us/,Parklands Law Campus contact page provides Nairobi postal address; location inferred from campus name
+1279,MOUNT KENYA UNIVERSITY,MOMBASA CAMPUS,no,Mombasa,Mombasa,Coast,http://mku.ac.ke/mku-mombasa-campus/,Page states campus is located in Mombasa along Nkrumah Road
+1279,MOUNT KENYA UNIVERSITY,NAKURU CAMPUS,no,Nakuru,Nakuru,Rift Valley,http://mku.ac.ke/nakuru-campus/,Page describes campus facilities at Great Rift Plaza (Nakuru)
+1279,MOUNT KENYA UNIVERSITY,ELDORET CAMPUS,no,Eldoret,Uasin Gishu,Rift Valley,http://mku.ac.ke/eldoret-campus/,Page states campus is located at the centre of Eldoret town
+1279,MOUNT KENYA UNIVERSITY,MERU CAMPUS,no,Meru,Meru,Eastern,http://mku.ac.ke/meru-campus/,Page states campus is at the heart of Meru town
+
+1112,TECHNICAL UNIVERSITY OF KENYA,MAIN CAMPUS,yes,Nairobi,Nairobi,Nairobi,https://tukenya.ac.ke/,Official homepage lists address: "P.O. Box 52428 - 00200 - Haile Selassie Avenue - Nairobi - Kenya"
+
+1063,TECHNICAL UNIVERSITY OF MOMBASA,MAIN CAMPUS (TUDOR),yes,Mombasa,Mombasa,Coast,https://www.tum.ac.ke/about/historical-background,Page header lists physical address: "Tom Mboya Street Tudor - Msa"
+
+1253,MOI UNIVERSITY,MAIN CAMPUS (KESSES),yes,Eldoret,Uasin Gishu,Rift Valley,https://mu.ac.ke/index.php/contact/,Campus contact section lists Main Campus at Kesses Eldoret
+1253,MOI UNIVERSITY,COLLEGE OF HEALTH SCIENCES (CHS),no,Eldoret,Uasin Gishu,Rift Valley,https://mu.ac.ke/index.php/contact/,Campus contact section lists CHS in Eldoret
+1253,MOI UNIVERSITY,ANNEX CAMPUS,no,Eldoret,Uasin Gishu,Rift Valley,https://mu.ac.ke/index.php/contact/,Campus contact section lists Annex Campus on Nairobi road Eldoret
+1253,MOI UNIVERSITY,NAIROBI CAMPUS,no,Nairobi,Nairobi,Nairobi,https://mu.ac.ke/index.php/contact/,Campus contact section lists Nairobi Campus at The Bazaar Plaza (Moi Avenue)
+
+1114,UNIVERSITY OF ELDORET,MAIN CAMPUS (CHEPKOILEL),yes,Eldoret,Uasin Gishu,Rift Valley,https://uoeld.ac.ke/admissions/main-campus-intake,Breadcrumb states located Eldoret-Ziwa Road Chepkoilel 9km from Eldoret Town
+1114,UNIVERSITY OF ELDORET,ELDORET TOWN CAMPUS,no,Eldoret,Uasin Gishu,Rift Valley,https://uoeld.ac.ke/eldoret-town-campus,Page states Town Campus located at MUSCO Towers in Eldoret Town
+
+1244,KARATINA UNIVERSITY,KAGOCHI (MAIN CAMPUS),yes,Karatina,Nyeri,Central,https://karu.ac.ke/university-profile/,University profile lists campus in Kagochi (Main); county inferred from town
+1244,KARATINA UNIVERSITY,KARATINA TOWN CAMPUS (SCHOOL OF BUSINESS),no,Karatina,Nyeri,Central,https://karu.ac.ke/university-profile/,University profile lists School of Business Karatina town
+1244,KARATINA UNIVERSITY,ITIATI CAMPUS (SCHOOL OF EDUCATION),no,Itiati,Kirinyaga,Central,https://karu.ac.ke/university-profile/,University profile lists School of Education Itiati; county inferred from campus name
+
+1246,MURANG'A UNIVERSITY OF TECHNOLOGY,MAIN CAMPUS,yes,Murang'a,Murang'a,Central,https://www.mut.ac.ke/contact/,Contact page lists postal address P.O Box 75-10200 Muranga Kenya
+1246,MURANG'A UNIVERSITY OF TECHNOLOGY,MARIIRA CAMPUS,no,Mariira,Murang'a,Central,https://www.mut.ac.ke/mariira-campus/,Mariira campus page lists postal address P.O Box 75-10200 Muranga Kenya
+
+1117,PWANI UNIVERSITY,MAIN CAMPUS,yes,Kilifi,Kilifi,Coast,https://pu.ac.ke/index.php/information-center/contact-information,Contact page lists address P.O Box 195-80108 Kilifi Kenya
+
+1108,KIBABII UNIVERSITY,MAIN CAMPUS,yes,Bungoma,Bungoma,Western,https://global.kibu.ac.ke/contact-us/,Contact page lists location Bungoma County Chele - Kimilili - Kamukywa Road
+
+1073,RONGO UNIVERSITY,MAIN CAMPUS,yes,Rongo,Migori,Nyanza,https://www.rongovarsity.ac.ke/contact-us/,Contact page states university is situated in Rongo town in Migori County
+
+1079,KIRINYAGA UNIVERSITY,MAIN CAMPUS (KUTUS),yes,Kerugoya,Kirinyaga,Central,https://www.kyu.ac.ke/contact-us,Contact page lists Main Campus Kutus Kerugoya Kirinyaga County
+
+1470,KAIMOSI FRIENDS UNIVERSITY,MAIN CAMPUS (KAIMOSI),yes,Kaimosi,Vihiga,Western,https://kafu.ac.ke/,Homepage lists postal address P.O BOX 385 - 50309 Kaimosi - Kenya; county inferred from town
+
+1425,ZETECH UNIVERSITY,RUIRU CAMPUS (THIKA ROAD),yes,Ruiru,Kiambu,Central,https://www.zetech.ac.ke/index.php/about/zetech-campuses,Campuses page states Ruiru Campus situated off Thika Road in Ruiru
+1425,ZETECH UNIVERSITY,TECHNOLOGY PARK MANG'U CAMPUS,no,Mang'u,Kiambu,Central,https://www.zetech.ac.ke/index.php/about/zetech-campuses,Campuses page states Technology Park Mang'u Campus located adjacent to Mang'u High School
+1425,ZETECH UNIVERSITY,NAIROBI CITY CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.zetech.ac.ke/index.php/about/zetech-campuses,Campuses page states Nairobi City Campus located in CBD along Moi Avenue
+1425,ZETECH UNIVERSITY,DIGITAL SCHOOL (ODEL),no,Online,N/A,N/A,https://www.zetech.ac.ke/index.php/about/zetech-campuses,Campuses page describes Zetech Digital School as online and blended learning
+
+1091,TAITA TAVETA UNIVERSITY,MAIN CAMPUS (MARIWENI - VOI),yes,Voi,Taita Taveta,Coast,https://www.ttu.ac.ke/contact/,Contact page lists location P.O. Box 635 - 80300 Voi Kenya (Mariweni)
+
+1093,UNIVERSITY OF EMBU,MAIN CAMPUS,yes,Embu,Embu,Eastern,https://embuni.ac.ke/our-contacts/,Contacts page lists address P.O. BOX 6 - 60100 Embu Kenya
+
+1105,CHUKA UNIVERSITY,MAIN CAMPUS,yes,Chuka,Tharaka-Nithi,Eastern,https://www.chuka.ac.ke/contact/,Contact page lists postal address P.O. Box 109 - 60400 Chuka Kenya; county inferred from town
+1105,CHUKA UNIVERSITY,NAIROBI CAMPUS (ELIMU PLAZA),no,Nairobi,Nairobi,Nairobi,https://nc.chuka.ac.ke/contact/,Contact page lists campus location Chuka University Elimu Plaza
+1105,CHUKA UNIVERSITY,EMBU CAMPUS,no,Embu,Embu,Eastern,https://embu.chuka.ac.ke/contact/,Contact page lists campus location Embu Town
+1105,CHUKA UNIVERSITY,IGEMBE CAMPUS (NEAR MAUA),no,Maua,Meru,Eastern,https://www.chuka.ac.ke/chuka-university-igembe-campus/,Page states campus located in Meru County and 4 km from Maua Town
+1105,CHUKA UNIVERSITY,CHOGORIA TEACHING CENTER,no,Chogoria,Tharaka-Nithi,Eastern,https://chogoria.chuka.ac.ke/contact/,Contact page lists location along Chuka-Meru road near Maara Sub County Commissioner’s Offices
+
+1118,UNIVERSITY OF KABIANGA,MAIN CAMPUS,yes,Kabianga,Kericho,Rift Valley,http://kabianga.ac.ke/about-kabianga-0,About page states university located in Kabianga Division and situated in Kabianga Complex
+1118,UNIVERSITY OF KABIANGA,KERICHO TOWN CAMPUS,no,Kericho,Kericho,Rift Valley,https://kabianga.ac.ke/town-campus-0,Town Campus page states campus housed in Telkom Orange House along Temple Road
+1118,UNIVERSITY OF KABIANGA,KAPKATET CAMPUS,no,Kapkatet,Kericho,Rift Valley,http://kabianga.ac.ke/about-kabianga-0,About page states Kapkatet campus located in Kapkatet town along Kericho Kisii highway
+1118,UNIVERSITY OF KABIANGA,SOTIK CAMPUS,no,Sotik,Bomet,Rift Valley,http://kabianga.ac.ke/about-kabianga-0,About page states Sotik campus located in Sotik town along Kericho Kisii highway; county inferred from town
+
+1103,KCA UNIVERSITY,MAIN CAMPUS (RUARAKA),yes,Nairobi,Nairobi,Nairobi,https://www.kcau.ac.ke/office-of-the-vice-chancellor-ceo/,Contact information section lists Thika Road Ruaraka Nairobi
+1103,KCA UNIVERSITY,TOWN CAMPUS (NAIROBI CBD),no,Nairobi,Nairobi,Nairobi,https://monrovia.kcau.ac.ke/about-town-campus/,Page states campus moved to Monrovia Plaza along Monrovia Street
+1103,KCA UNIVERSITY,WESTERN CAMPUS (KISUMU),no,Kisumu,Kisumu,Nyanza,https://kisumu.kcau.ac.ke/,About section states campus located in Kisumu CBD along Oginga Odinga Street at Mega Plaza
+1103,KCA UNIVERSITY,KITENGELA CAMPUS,no,Kitengela,Kajiado,Rift Valley,https://kitengela.kcau.ac.ke/about-kitengela-campus/,About page states location in Kitengela Town (Kitengela Capital Centre)
+
+1162,DAYSTAR UNIVERSITY,ATHI RIVER CAMPUS (MAIN CAMPUS),yes,Athi River,Machakos,Eastern,https://www.daystar.ac.ke/athi-river-campus.html,Campus page states main campus situated in Athi River 40 kilometers from Nairobi CBD; county inferred from town
+1162,DAYSTAR UNIVERSITY,NAIROBI CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.daystar.ac.ke/nairobi-campus.html,Page states Nairobi Campus located at junction of Valley Road and Ngong Road near Nairobi Hospital
+
+1078,AFRICA NAZARENE UNIVERSITY,MAIN CAMPUS (ONGATA RONGAI),yes,Ongata Rongai,Kajiado,Rift Valley,https://www.anu.ac.ke/contact-us/,Contact page lists main campus Ongata Rongai Magadi Rd; county inferred from town
+
+1107,ST PAULS UNIVERSITY,MAIN CAMPUS (LIMURU),yes,Limuru,Kiambu,Central,https://www.spu.ac.ke/index.php/contact-us,Contact page lists address Private Bag Limuru 00217; county inferred from town
+1107,ST PAULS UNIVERSITY,NAIROBI CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.spu.ac.ke/nairobi/index.php/about-spu,About page states Nairobi Campus located in CBD at Church House Building
+1107,ST PAULS UNIVERSITY,NAKURU CAMPUS,no,Nakuru,Nakuru,Rift Valley,https://spu.ac.ke/nakuru/,Nakuru campus page states campus located at ACK St. Christopher's Building next to KFA Roundabout in Nakuru City
+
+1088,GRETSA UNIVERSITY,MAIN CAMPUS (THIKA),yes,Thika,Kiambu,Central,https://gretsauniversity.ac.ke/,Homepage states university located in Thika Town along Thika-Garissa Road; county inferred from town
+
+1090,SCOTT CHRISTIAN UNIVERSITY,MAIN CAMPUS,yes,Machakos,Machakos,Eastern,https://scott.ac.ke/about-scu/governance/,Governance page states campus located just outside Machakos Town at foot of Iveti Hills
+
+1068,PAN AFRICA CHRISTIAN UNIVERSITY,THIKA ROAD CAMPUS (ROYSAMBU),yes,Nairobi,Nairobi,Nairobi,https://www.pacuniversity.ac.ke/thika-road-campus/,Campus page states Thika Road Campus located along Lumumba Drive Roysambu
+1068,PAN AFRICA CHRISTIAN UNIVERSITY,VALLEY ROAD CAMPUS,no,Nairobi,Nairobi,Nairobi,https://www.pacuniversity.ac.ke/valley-road-campus/,Campus page states Valley Road Campus within CITAM Valley Road premises about 3 km from Nairobi CBD
+
+1077,KENYA METHODIST UNIVERSITY,MAIN CAMPUS (KAAGA),yes,Meru,Meru,Eastern,https://kemu.ac.ke/contact,Contact page lists Main Campus Kaaga off Meru-Maua Highway in Meru County
+1077,KENYA METHODIST UNIVERSITY,NAIROBI CAMPUS,no,Nairobi,Nairobi,Nairobi,https://kemu.ac.ke/contact,Contact page lists Nairobi Campus at KeMU Towers University Way
+1077,KENYA METHODIST UNIVERSITY,MOMBASA CAMPUS,no,Mombasa,Mombasa,Coast,https://kemu.ac.ke/contact,Contact page lists Mombasa Campus opposite Buxton Point gate B on Narok Road Buxton
+
+1119,AFRICA INTERNATIONAL UNIVERSITY,MAIN CAMPUS (KAREN),yes,Karen,Nairobi,Nairobi,https://www.aiu.ac.ke/contact-us/,Contact page lists location Karen Nairobi along Karen-Dagoreti Road
+
+1164,MULTIMEDIA UNIVERSITY OF KENYA,MAIN CAMPUS (KAREN),yes,Karen,Nairobi,Nairobi,https://www.mmu.ac.ke/campus/,Campus page states Main Campus located along Magadi road in Karen area of Nairobi
+
+1166,SOUTH EASTERN KENYA UNIVERSITY,MAIN CAMPUS (KWA VONZA),yes,Kwa Vonza,Kitui,Eastern,https://www.seku.ac.ke/index.php/south-eastern-kenya-university-undergraduate-admissions.html?id=63,Application procedures page lists SEKU Main Campus Kwa Vonza off Machakos-Nairobi Road; county inferred from town
+1166,SOUTH EASTERN KENYA UNIVERSITY,KITUI TOWN CAMPUS,no,Kitui,Kitui,Eastern,https://www.seku.ac.ke/seku-campuses.html,Campuses page states Kitui Town Campus located at BLI Manyenyoni in Kitui Town; county inferred from town
+1166,SOUTH EASTERN KENYA UNIVERSITY,WOTE CAMPUS,no,Wote,Makueni,Eastern,https://www.seku.ac.ke/seku-campuses.html,Campuses page states Wote Campus located 2.8 km from Wote town next to Government of Makueni County offices
+1166,SOUTH EASTERN KENYA UNIVERSITY,MTITO ANDEI CENTER,no,Mtito Andei,Makueni,Eastern,https://www.seku.ac.ke/seku-campuses.html,Campuses page states Mtito Andei Center located along Nairobi-Mombasa highway in Makueni County
+1166,SOUTH EASTERN KENYA UNIVERSITY,MIGWANI CENTER,no,Migwani,Kitui,Eastern,https://www.seku.ac.ke/seku-campuses.html,Campuses page states Migwani Center located in Nzatani village Migwani location Migwani sub county Kitui county
+
+1165,MAASAI MARA UNIVERSITY,MAIN CAMPUS,yes,Narok,Narok,Rift Valley,https://www.mmarau.ac.ke/contact/,Contact page lists address P.O. Box 861 – 20500 Narok Kenya
+
+1169,KENYA HIGHLANDS EVANGELICAL UNIVERSITY,MAIN CAMPUS,yes,Kericho,Kericho,Rift Valley,https://khu.ac.ke/about-us/,About us page states university located in Kericho County Kericho Town
+1170,MACHAKOS UNIVERSITY,MAIN CAMPUS,yes,Machakos,Machakos,Eastern,https://www.mksu.ac.ke/contact-us/,Contact page lists address P.O. BOX 136 – 90100 Machakos Kenya
+1173,DEDAN KIMATHI UNIVERSITY OF TECHNOLOGY,MAIN CAMPUS (NYERI),yes,Nyeri,Nyeri,Central,https://www.dkut.ac.ke/index.php/about-dekut/s5-accordion-menu/location-and-contacts,Location and contacts page lists physical address along Nyeri - Mweiga road
+1173,DEDAN KIMATHI UNIVERSITY OF TECHNOLOGY,NAIROBI CBD CENTRE (PENSION TOWERS),no,Nairobi,Nairobi,Nairobi,https://www.dkut.ac.ke/index.php/about-dekut/s5-accordion-menu/location-and-contacts,Location and contacts page lists physical address Pension Towers 13th Floor along Loita Street
+1176,LAIKIPIA UNIVERSITY,MAIN CAMPUS,yes,Nyahururu,Laikipia,Rift Valley,https://laikipia.ac.ke/contact-us,Contact page lists Laikipia University P.O. Box 1100 – 20300 Nyahururu Kenya
+
+1080,CO-OPERATIVE UNIVERSITY OF KENYA,MAIN CAMPUS (KAREN),yes,Karen,Nairobi,Nairobi,https://cuk.ac.ke/contact/,Contact page lists location Karen Nairobi
+
+1053,JARAMOGI OGINGA ODINGA UNIVERSITY OF SCIENCE AND TECHNOLOGY,BONDO (MAIN) CAMPUS,yes,Bondo,Siaya,Nyanza,https://www.jooust.ac.ke/index.php/jooust-contacts,Contacts page lists Bondo Main Campus P.O. Box 210 - 40601 Bondo Kenya; county inferred from town
+
+1060,RIARA UNIVERSITY,MAIN CAMPUS,yes,Nairobi,Nairobi,Nairobi,https://riarauniversity.ac.ke/contact-us/,Contact page lists location Raila Odinga Road formerly Mbagathi Way Nairobi
+
+1061,KABARAK UNIVERSITY,MAIN CAMPUS,yes,Kabarak,Nakuru,Rift Valley,https://kabarak.ac.ke/contacts,Contacts page states Main campus located 20 Kilometres from Nakuru City CBD along Nakuru - Eldama Ravine road
+
+1066,MANAGEMENT UNIVERSITY OF AFRICA,MAIN CAMPUS (KISAJU),yes,Kisaju,Kajiado,Rift Valley,https://mua.ac.ke/charter/,Charter page states Main Campus located in Kisaju Kajiado County
+1066,MANAGEMENT UNIVERSITY OF AFRICA,SOUTH C CAMPUS,no,Nairobi,Nairobi,Nairobi,https://mua.ac.ke/charter/,Charter page lists South C Campus on Popo Road off Mombasa Road Belleview South C
+
+1096,GARISSA UNIVERSITY,MAIN CAMPUS,yes,Garissa,Garissa,North Eastern,https://gau.ac.ke/garissa-university-departments/,Departments page lists Main Campus University Way off Kismayu Road Garissa
