@@ -5,6 +5,15 @@
 {% if error %}
 <div style="color:#a00">Error: {{ error }}</div>
 {% endif %}
+{% if job_running %}
+<div style="color:#070">Job running (pid={{ job_pid }})</div>
+{% endif %}
+{% if job_log_path %}
+<div>Log: <code>{{ job_log_path }}</code></div>
+{% endif %}
+{% if job_log_tail %}
+<pre style="white-space:pre-wrap; background:#111; color:#ddd; padding:12px; border-radius:6px; max-height:360px; overflow:auto;">{{ job_log_tail }}</pre>
+{% endif %}
 {% if messages %}
   {% for m in messages %}
     <div style="color:#333">{{ m }}</div>

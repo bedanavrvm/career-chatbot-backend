@@ -22,12 +22,14 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect, csrf_exempt
 from django.conf import settings
 import os
+import subprocess
 import base64
 import json
 import csv
 from pathlib import Path
 import sys
 import math
+from datetime import datetime
 import firebase_admin
 from firebase_admin import auth as fb_auth, credentials
 
@@ -914,6 +916,44 @@ def admin_etl_process(request):
     Optional body: {"action": "transform-normalize"}
     Invokes transform-normalize to regenerate processed CSVs using local config.
     """
+    etl_dir = Path(__file__).resolve().parent.parent / "scripts" / "etl" / "kuccps"
+    job_dir = etl_dir / "logs"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_state_path = job_dir / "admin_etl_job.json"
+
+    def _load_job_state():
+        try:
+            if job_state_path.exists():
+                return json.loads(job_state_path.read_text(encoding="utf-8") or "{}") or {}
+        except Exception:
+            return {}
+        return {}
+
+    def _pid_running(pid: int) -> bool:
+        try:
+            if pid <= 0:
+                return False
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def _tail_text(fp: Path, max_lines: int = 200) -> str:
+        try:
+            if not fp.exists():
+                return ""
+            txt = fp.read_text(encoding="utf-8", errors="ignore")
+            lines = txt.splitlines()
+            return "\n".join(lines[-max_lines:])
+        except Exception:
+            return ""
+
+    job_state = _load_job_state()
+    job_pid = int(job_state.get("pid") or 0) if job_state else 0
+    job_log_path = Path(job_state.get("log_path") or "") if job_state.get("log_path") else None
+    job_running = _pid_running(job_pid) if job_pid else False
+    job_log_tail = _tail_text(job_log_path) if job_log_path else ""
+
     if request.method == "GET":
         actions = [
             "extract",
@@ -926,7 +966,13 @@ def admin_etl_process(request):
             "load",
             "all",
         ]
-        return render(request, "admin/etl_process.html", {"actions": actions})
+        return render(request, "admin/etl_process.html", {
+            "actions": actions,
+            "job_running": job_running,
+            "job_pid": job_pid,
+            "job_log_path": str(job_log_path) if job_log_path else "",
+            "job_log_tail": job_log_tail,
+        })
     try:
         # Allow both JSON body and form submission
         action = (request.POST.get("action") or "transform-normalize").strip()
@@ -934,7 +980,80 @@ def admin_etl_process(request):
         inplace = bool(request.POST.get("inplace"))
         dry_run = bool(request.POST.get("dry_run"))
 
-        etl_dir = Path(__file__).resolve().parent.parent / "scripts" / "etl" / "kuccps"
+        if action == "all" and os.getenv("ETL_RUN_ALL_ASYNC", "1").strip().lower() not in ("0", "false", "no"):
+            actions = [
+                "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
+            ]
+            msg = []
+            if job_running:
+                msg.append("ETL job already running")
+                return render(request, "admin/etl_process.html", {
+                    "actions": actions,
+                    "action": action,
+                    "ran": False,
+                    "messages": msg,
+                    "config_value": config_path,
+                    "inplace": inplace,
+                    "dry_run": dry_run,
+                    "job_running": job_running,
+                    "job_pid": job_pid,
+                    "job_log_path": str(job_log_path) if job_log_path else "",
+                    "job_log_tail": job_log_tail,
+                })
+
+            log_fp = job_dir / f"admin_etl_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+            cmd = [
+                sys.executable,
+                "manage.py",
+                "kuccps_etl",
+                "--action",
+                "all",
+            ]
+            if config_path:
+                cmd.extend(["--config", config_path])
+            if inplace:
+                cmd.append("--inplace")
+            if dry_run:
+                cmd.append("--dry-run")
+
+            with open(log_fp, "a", encoding="utf-8") as logf:
+                p = subprocess.Popen(
+                    cmd,
+                    cwd=str(Path(__file__).resolve().parent.parent),
+                    stdout=logf,
+                    stderr=logf,
+                    start_new_session=True,
+                )
+
+            job_state = {
+                "pid": p.pid,
+                "log_path": str(log_fp),
+                "started_at": datetime.utcnow().isoformat() + "Z",
+                "action": action,
+                "config": config_path,
+                "dry_run": bool(dry_run),
+                "inplace": bool(inplace),
+            }
+            try:
+                job_state_path.write_text(json.dumps(job_state), encoding="utf-8")
+            except Exception:
+                pass
+
+            msg.append(f"Started ETL job pid={p.pid}")
+            return render(request, "admin/etl_process.html", {
+                "actions": actions,
+                "action": action,
+                "ran": False,
+                "messages": msg,
+                "config_value": config_path,
+                "inplace": inplace,
+                "dry_run": dry_run,
+                "job_running": True,
+                "job_pid": p.pid,
+                "job_log_path": str(log_fp),
+                "job_log_tail": _tail_text(log_fp),
+            })
+
         sys.path.append(str(etl_dir))
         from etl import (
             Config,
@@ -1168,17 +1287,18 @@ def admin_etl_process(request):
             copy_inputs(cfg)
             bootstrap_csvs(cfg)
             # Auto-extract all uploaded PDFs under raw/uploads (multi-source)
-            uploads = (etl_dir / "raw" / "uploads")
-            if uploads.exists():
-                pdfs = sorted(uploads.glob("*.pdf"))
-                for latest in pdfs:
-                    try:
-                        rel = latest.resolve().relative_to(cfg.dataset_root)
-                    except Exception:
-                        rel = latest.resolve().relative_to(etl_dir)
-                    cfg.inputs["programs_pdf"] = str(rel)
-                    cfg.inputs["source_id"] = latest.stem
-                    extract_programs(cfg)
+            if os.getenv("ETL_SKIP_PDF_EXTRACT", "").strip().lower() not in ("1", "true", "yes"):
+                uploads = (etl_dir / "raw" / "uploads")
+                if uploads.exists():
+                    pdfs = sorted(uploads.glob("*.pdf"))
+                    for latest in pdfs:
+                        try:
+                            rel = latest.resolve().relative_to(cfg.dataset_root)
+                        except Exception:
+                            rel = latest.resolve().relative_to(etl_dir)
+                        cfg.inputs["programs_pdf"] = str(rel)
+                        cfg.inputs["source_id"] = latest.stem
+                        extract_programs(cfg)
             transform_programs(cfg)
             transform_normalize(cfg)
             dedup_programs(cfg, inplace=False)
@@ -1241,6 +1361,10 @@ def admin_etl_process(request):
             "config_value": config_path,
             "load_summary": load_summary,
             "etl_stats_kv": etl_stats_kv,
+            "job_running": job_running,
+            "job_pid": job_pid,
+            "job_log_path": str(job_log_path) if job_log_path else "",
+            "job_log_tail": job_log_tail,
         })
     except Exception as e:
         actions = [

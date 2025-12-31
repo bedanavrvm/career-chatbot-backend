@@ -163,35 +163,45 @@ def extract_programs(cfg: Config) -> None:
 
     pages_cnt = 0
     tables_cnt = 0
+    try:
+        max_pages = int((os.getenv("ETL_MAX_PAGES", "0") or "0").strip() or "0")
+    except Exception:
+        max_pages = 0
+    skip_text = (os.getenv("ETL_SKIP_TEXT", "") or "").strip().lower() in ("1", "true", "yes")
+    skip_tables = (os.getenv("ETL_SKIP_TABLES", "") or "").strip().lower() in ("1", "true", "yes")
     with pdfplumber.open(str(src)) as pdf:
         for pi, page in enumerate(pdf.pages, start=1):
+            if max_pages and pi > max_pages:
+                break
             pages_cnt += 1
             # dump text
             try:
-                txt = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-                (text_dir / f"page_{pi:04d}.txt").write_text(txt, encoding="utf-8")
+                if not skip_text:
+                    txt = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
+                    (text_dir / f"page_{pi:04d}.txt").write_text(txt, encoding="utf-8")
             except Exception as e:
                 logger.warning("page %d text extract failed: %s", pi, e)
             # naive table extraction
             try:
-                tables = page.extract_tables(table_settings={
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "lines",
-                    "intersection_tolerance": 5,
-                }) or []
-                for ti, table in enumerate(tables, start=1):
-                    tables_cnt += 1
-                    out = tables_dir / f"page_{pi:04d}_table_{ti:02d}.csv"
-                    with open(out, "w", newline="", encoding="utf-8") as f:
-                        # Write as TSV to avoid quoting around commas in programme names
-                        writer = csv.writer(f, delimiter="\t")
-                        for row in table:
-                            cleaned_row: List[str] = []
-                            for c in row:
-                                s = (c or "").replace("\r", " ").replace("\n", " ")
-                                s = re.sub(r"\s+", " ", s).strip()
-                                cleaned_row.append(s)
-                            writer.writerow(cleaned_row)
+                if not skip_tables:
+                    tables = page.extract_tables(table_settings={
+                        "vertical_strategy": "lines",
+                        "horizontal_strategy": "lines",
+                        "intersection_tolerance": 5,
+                    }) or []
+                    for ti, table in enumerate(tables, start=1):
+                        tables_cnt += 1
+                        out = tables_dir / f"page_{pi:04d}_table_{ti:02d}.csv"
+                        with open(out, "w", newline="", encoding="utf-8") as f:
+                            # Write as TSV to avoid quoting around commas in programme names
+                            writer = csv.writer(f, delimiter="\t")
+                            for row in table:
+                                cleaned_row: List[str] = []
+                                for c in row:
+                                    s = (c or "").replace("\r", " ").replace("\n", " ")
+                                    s = re.sub(r"\s+", " ", s).strip()
+                                    cleaned_row.append(s)
+                                writer.writerow(cleaned_row)
             except Exception as e:
                 logger.warning("page %d table extract failed: %s", pi, e)
 
