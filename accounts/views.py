@@ -6,6 +6,7 @@ import math
 import os
 import base64
 import json
+import logging
 import firebase_admin
 from firebase_admin import auth as fb_auth, credentials
 from .models import UserProfile, OnboardingProfile
@@ -20,6 +21,8 @@ except Exception:
 
 
 _FIREBASE_INIT_ERROR: str = ''
+
+_logger = logging.getLogger(__name__)
 
 
 # Ensure Firebase Admin is initialized (in case urls init didn't run yet)
@@ -132,8 +135,12 @@ def register(request):
         if not profile:
             return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         return Response(UserProfileSerializer(profile).data)
-    except Exception:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
+        detail = "Invalid token"
+        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
 
 # ------------------------------
 # Onboarding APIs
@@ -154,8 +161,12 @@ def _require_user(request):
         if not profile:
             return None, Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         return profile, None
-    except Exception:
-        return None, Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
+        detail = "Invalid token"
+        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return None, Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
@@ -363,8 +374,12 @@ def login(request):
         if not profile:
             return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         return Response(UserProfileSerializer(profile).data)
-    except Exception:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
+        detail = "Invalid token"
+        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 @api_view(['GET'])
@@ -383,5 +398,9 @@ def me(request):
         if not profile:
             return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         return Response(UserProfileSerializer(profile).data)
-    except Exception:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
+        detail = "Invalid token"
+        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)

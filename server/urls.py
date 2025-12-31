@@ -31,23 +31,49 @@ import math
 import firebase_admin
 from firebase_admin import auth as fb_auth, credentials
 
-if not firebase_admin._apps:
-    b64 = os.getenv('FIREBASE_CREDENTIALS_JSON_B64')
-    if b64:
-        try:
-            data = json.loads(base64.b64decode(b64).decode('utf-8'))
-            cred = credentials.Certificate(data)
-            firebase_admin.initialize_app(cred)
-        except Exception:
-            # Fallback: app remains uninitialized; secure endpoints will error until configured
-            pass
+_FIREBASE_INIT_ERROR: str = ''
 
+def _ensure_firebase_initialized() -> bool:
+    global _FIREBASE_INIT_ERROR
+    if firebase_admin._apps:
+        return True
+
+    path = (os.getenv('FIREBASE_CREDENTIALS_JSON_PATH') or os.getenv('GOOGLE_APPLICATION_CREDENTIALS') or '').strip()
+    if path:
+        try:
+            cred = credentials.Certificate(path)
+            firebase_admin.initialize_app(cred)
+            _FIREBASE_INIT_ERROR = ''
+            return True
+        except Exception as e:
+            _FIREBASE_INIT_ERROR = f"{e.__class__.__name__}: {str(e)}".strip()
+            return False
+
+    b64 = os.getenv('FIREBASE_CREDENTIALS_JSON_B64')
+    if not b64:
+        _FIREBASE_INIT_ERROR = 'Missing FIREBASE_CREDENTIALS_JSON_B64'
+        return False
+    try:
+        data = json.loads(base64.b64decode(b64).decode('utf-8'))
+        cred = credentials.Certificate(data)
+        firebase_admin.initialize_app(cred)
+        _FIREBASE_INIT_ERROR = ''
+        return True
+    except Exception as e:
+        _FIREBASE_INIT_ERROR = f"{e.__class__.__name__}: {str(e)}".strip()
+        return False
+
+_ensure_firebase_initialized()
 
 def health(_request):
     return JsonResponse({"status": "ok"})
 
-
 def secure_ping(request):
+    if not _ensure_firebase_initialized():
+        detail = "Firebase admin not initialized"
+        if _FIREBASE_INIT_ERROR:
+            detail = f"{detail}: {_FIREBASE_INIT_ERROR}"
+        return JsonResponse({"detail": detail}, status=503)
     auth_header = request.META.get('HTTP_AUTHORIZATION', '')
     token = ''
     if auth_header.startswith('Bearer '):
