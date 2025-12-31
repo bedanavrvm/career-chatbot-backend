@@ -16,6 +16,48 @@ if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
   python manage.py migrate --noinput
 fi
 
+if [ "${CREATE_SUPERUSER:-0}" = "1" ]; then
+  if [ -n "${DJANGO_SUPERUSER_USERNAME:-}" ] && [ -n "${DJANGO_SUPERUSER_EMAIL:-}" ] && [ -n "${DJANGO_SUPERUSER_PASSWORD:-}" ]; then
+    echo "[start] Ensuring Django superuser exists"
+    python - <<'PY'
+import os
+import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', os.getenv('DJANGO_SETTINGS_MODULE', 'server.settings'))
+django.setup()
+
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+username = os.environ['DJANGO_SUPERUSER_USERNAME']
+email = os.environ['DJANGO_SUPERUSER_EMAIL']
+password = os.environ['DJANGO_SUPERUSER_PASSWORD']
+
+u, created = User.objects.get_or_create(username=username, defaults={'email': email})
+changed = False
+if not u.is_staff:
+    u.is_staff = True
+    changed = True
+if not u.is_superuser:
+    u.is_superuser = True
+    changed = True
+if created:
+    u.set_password(password)
+    changed = True
+else:
+    # If a password is provided, keep existing password unless you explicitly rotate it elsewhere.
+    pass
+
+if changed:
+    if not u.email:
+        u.email = email
+    u.save()
+PY
+  else
+    echo "[start] CREATE_SUPERUSER=1 set but missing DJANGO_SUPERUSER_USERNAME/EMAIL/PASSWORD"
+  fi
+fi
+
 # Optional: collect static files if requested
 if [ "${COLLECTSTATIC:-0}" = "1" ]; then
   echo "[start] Collecting static files"
