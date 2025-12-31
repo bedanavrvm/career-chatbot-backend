@@ -11,6 +11,11 @@ fi
 export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-server.settings}
 export PORT=${PORT:-8000}
 
+if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+  echo "[start] Applying database migrations"
+  python manage.py migrate --noinput
+fi
+
 # Optional: collect static files if requested
 if [ "${COLLECTSTATIC:-0}" = "1" ]; then
   echo "[start] Collecting static files"

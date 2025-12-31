@@ -2,6 +2,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
+from django.conf import settings
 import math
 import os
 import base64
@@ -131,16 +133,31 @@ def register(request):
         return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
         claims = fb_auth.verify_id_token(token)
-        profile = _upsert_profile_from_claims(claims)
-        if not profile:
-            return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
-        return Response(UserProfileSerializer(profile).data)
     except Exception as e:
         _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
         detail = "Invalid token"
-        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
         return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        profile = _upsert_profile_from_claims(claims)
+    except (ProgrammingError, OperationalError) as e:
+        _logger.error("Database not initialized (missing migrations?): %s: %s", e.__class__.__name__, str(e))
+        detail = "Database not initialized"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as e:
+        _logger.exception("Unexpected error during register profile upsert: %s: %s", e.__class__.__name__, str(e))
+        detail = "Server error"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not profile:
+        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response(UserProfileSerializer(profile).data)
 
 # ------------------------------
 # Onboarding APIs
@@ -157,16 +174,31 @@ def _require_user(request):
         return None, Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
         claims = fb_auth.verify_id_token(token)
-        profile = _upsert_profile_from_claims(claims)
-        if not profile:
-            return None, Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
-        return profile, None
     except Exception as e:
         _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
         detail = "Invalid token"
-        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
         return None, Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        profile = _upsert_profile_from_claims(claims)
+    except (ProgrammingError, OperationalError) as e:
+        _logger.error("Database not initialized (missing migrations?): %s: %s", e.__class__.__name__, str(e))
+        detail = "Database not initialized"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return None, Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as e:
+        _logger.exception("Unexpected error during request user upsert: %s: %s", e.__class__.__name__, str(e))
+        detail = "Server error"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return None, Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not profile:
+        return None, Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    return profile, None
 
 
 def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
@@ -370,16 +402,31 @@ def login(request):
         return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
         claims = fb_auth.verify_id_token(token)
-        profile = _upsert_profile_from_claims(claims)
-        if not profile:
-            return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
-        return Response(UserProfileSerializer(profile).data)
     except Exception as e:
         _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
         detail = "Invalid token"
-        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
         return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        profile = _upsert_profile_from_claims(claims)
+    except (ProgrammingError, OperationalError) as e:
+        _logger.error("Database not initialized (missing migrations?): %s: %s", e.__class__.__name__, str(e))
+        detail = "Database not initialized"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as e:
+        _logger.exception("Unexpected error during login profile upsert: %s: %s", e.__class__.__name__, str(e))
+        detail = "Server error"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not profile:
+        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response(UserProfileSerializer(profile).data)
 
 
 @api_view(['GET'])
@@ -394,13 +441,28 @@ def me(request):
         return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
         claims = fb_auth.verify_id_token(token)
-        profile = _upsert_profile_from_claims(claims)
-        if not profile:
-            return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
-        return Response(UserProfileSerializer(profile).data)
     except Exception as e:
         _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
         detail = "Invalid token"
-        if os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
         return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        profile = _upsert_profile_from_claims(claims)
+    except (ProgrammingError, OperationalError) as e:
+        _logger.error("Database not initialized (missing migrations?): %s: %s", e.__class__.__name__, str(e))
+        detail = "Database not initialized"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as e:
+        _logger.exception("Unexpected error during me profile upsert: %s: %s", e.__class__.__name__, str(e))
+        detail = "Server error"
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not profile:
+        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response(UserProfileSerializer(profile).data)
