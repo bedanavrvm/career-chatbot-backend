@@ -189,9 +189,6 @@ def api_programs(request):
     Reads programs_deduped.csv (or programs.csv) and returns paginated results.
     """
     try:
-        fp = _programs_path()
-        if not fp.exists():
-            return JsonResponse({"detail": f"Programs file not found at {fp}"}, status=500)
         q = (request.GET.get("q") or "").strip().lower()
         field = (request.GET.get("field") or "").strip().lower()
         level = (request.GET.get("level") or "").strip().lower()
@@ -199,8 +196,86 @@ def api_programs(request):
         page = max(1, int(request.GET.get("page", 1)))
         page_size = max(1, min(50, int(request.GET.get("page_size", 20))))
 
+        try:
+            from catalog.models import Program  # type: ignore
+        except Exception:
+            Program = None  # type: ignore
+
+        if Program is not None:
+            try:
+                from django.db.models import Q
+            except Exception:
+                Q = None
+
+            qs = Program.objects.select_related("institution", "field").all()
+            if q:
+                if Q is not None:
+                    qs = qs.filter(
+                        Q(name__icontains=q)
+                        | Q(normalized_name__icontains=q)
+                        | Q(institution__name__icontains=q)
+                        | Q(institution__alias__icontains=q)
+                    )
+                else:
+                    qs = qs.filter(normalized_name__icontains=q)
+            if level:
+                qs = qs.filter(level__iexact=level)
+            if region:
+                if Q is not None:
+                    qs = qs.filter(Q(region__icontains=region) | Q(institution__region__icontains=region) | Q(institution__county__icontains=region))
+                else:
+                    qs = qs.filter(region__icontains=region)
+            if field:
+                if Q is not None:
+                    qs = qs.filter(Q(field__name__iexact=field) | Q(field__slug__iexact=field))
+                else:
+                    qs = qs.filter(field__name__iexact=field)
+
+            total = int(qs.count())
+            if total <= 0:
+                return JsonResponse({
+                    "count": 0,
+                    "page": page,
+                    "page_size": page_size,
+                    "results": [],
+                    "detail": "No programmes found in the catalog database. This usually means the database has not been populated yet. Run the ETL load step to populate Program data.",
+                })
+
+            start = (page - 1) * page_size
+            end = start + page_size
+            items = []
+            for p in list(qs.order_by("normalized_name")[start:end]):
+                inst = getattr(p, "institution", None)
+                fld = getattr(p, "field", None)
+                items.append({
+                    "id": int(getattr(p, "id", 0) or 0),
+                    "program_code": (getattr(p, "code", "") or ""),
+                    "name": (getattr(p, "name", "") or ""),
+                    "normalized_name": (getattr(p, "normalized_name", "") or ""),
+                    "institution_name": (getattr(inst, "name", "") or "") if inst else "",
+                    "field_name": (getattr(fld, "name", "") or "") if fld else "",
+                    "level": (getattr(p, "level", "") or ""),
+                    "campus": (getattr(p, "campus", "") or ""),
+                    "region": (getattr(p, "region", "") or ""),
+                    "award": (getattr(p, "award", "") or ""),
+                })
+            return JsonResponse({
+                "count": total,
+                "page": page,
+                "page_size": page_size,
+                "results": items,
+            })
+
+        fp = _programs_path()
+        if not fp.exists():
+            return JsonResponse({
+                "count": 0,
+                "page": page,
+                "page_size": page_size,
+                "results": [],
+                "detail": f"Programs file not found at {fp}",
+            }, status=503)
         all_rows, etag = _read_programs_cached()
-        # Conditional GET via ETag
         inm = request.META.get("HTTP_IF_NONE_MATCH")
         if inm and inm == etag:
             return HttpResponse(status=304)
