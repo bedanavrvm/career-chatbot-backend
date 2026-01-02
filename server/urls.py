@@ -136,6 +136,11 @@ def _fields_path() -> Path:
     return _processed_dir() / "fields.csv"
 
 
+def _university_campuses_draft_path() -> Path:
+    backend_dir = Path(__file__).resolve().parent.parent
+    return backend_dir / "scripts" / "etl" / "kuccps" / "mappings" / "university_campuses_draft.csv"
+
+
 # ---- Simple in-process CSV cache and ETag helpers (dev-friendly) ----
 # Cache keyed by absolute path; values: {"sig": (mtime, size), "rows": [...]}.
 _CSV_CACHE: dict[str, dict] = {}
@@ -342,7 +347,54 @@ def api_catalog_institution_detail(request, institution_code: str):
 
         campuses = []
         try:
-            if InstitutionCampus is not None:
+            # Prefer curated mapping file (has explicit is_main).
+            draft_fp = _university_campuses_draft_path()
+            if draft_fp.exists():
+                rows, _etag = _read_csv_cached(draft_fp)
+                code_key = (inst.code or "").strip()
+                draft_rows = [r for r in rows if (str(r.get("institution_code") or "").strip() == code_key)]
+                for r in draft_rows:
+                    campus_name = (r.get("campus") or "").strip()
+                    town = (r.get("town") or "").strip()
+                    county = (r.get("county") or "").strip()
+                    region = (r.get("region") or "").strip()
+                    source_url = (r.get("source_url") or "").strip()
+                    is_main = (str(r.get("is_main") or "").strip().lower() in ("yes", "y", "1", "true"))
+
+                    label_parts = [p for p in [campus_name, town, county, region, inst.name] if p]
+                    seen = set()
+                    deduped = []
+                    for p in label_parts:
+                        k = (p or "").strip().lower()
+                        if not k or k in seen:
+                            continue
+                        seen.add(k)
+                        deduped.append(p)
+                    label = ", ".join(deduped)
+
+                    campuses.append({
+                        "campus": campus_name,
+                        "town": town,
+                        "county": county,
+                        "region": region,
+                        "is_main": bool(is_main),
+                        "map_query": label,
+                        "source_url": source_url,
+                    })
+
+                if campuses:
+                    # Ensure exactly one main campus (keep the first marked main)
+                    main_seen = False
+                    for c in campuses:
+                        if c.get("is_main") and not main_seen:
+                            main_seen = True
+                        elif c.get("is_main") and main_seen:
+                            c["is_main"] = False
+                    if not main_seen:
+                        campuses[0]["is_main"] = True
+
+            # Fallback: DB campuses (no explicit is_main)
+            if not campuses and InstitutionCampus is not None:
                 rows = list(InstitutionCampus.objects.filter(institution_id=inst.id).order_by("campus").values(
                     "campus", "town", "county", "region",
                 ))
@@ -351,22 +403,54 @@ def api_catalog_institution_detail(request, institution_code: str):
                     town = (r.get("town") or "").strip()
                     county = (r.get("county") or "").strip()
                     region = (r.get("region") or "").strip()
+
                     label_parts = [p for p in [campus_name, town, county, region, inst.name] if p]
-                    label = ", ".join(label_parts)
-                    is_main = False
+                    seen = set()
+                    deduped = []
+                    for p in label_parts:
+                        k = (p or "").strip().lower()
+                        if not k or k in seen:
+                            continue
+                        seen.add(k)
+                        deduped.append(p)
+                    label = ", ".join(deduped)
+
+                    score = 0
                     cn = campus_name.lower()
                     if cn:
-                        is_main = ("main" in cn) or ("head" in cn) or ("central" in cn)
+                        if any(k in cn for k in ("main", "head", "central", "hq", "headquarters")):
+                            score += 100
+                    inst_county = (getattr(inst, "county", "") or "").strip().lower()
+                    inst_region = (getattr(inst, "region", "") or "").strip().lower()
+                    if inst_county and county and inst_county == county.lower():
+                        score += 40
+                    if inst_region and region and inst_region == region.lower():
+                        score += 25
+                    iname = (getattr(inst, "name", "") or "").strip().lower()
+                    if iname and cn and iname in cn:
+                        score += 10
+
                     campuses.append({
                         "campus": campus_name,
                         "town": town,
                         "county": county,
                         "region": region,
-                        "is_main": bool(is_main),
+                        "is_main": False,
                         "map_query": label,
+                        "_score": int(score),
                     })
-                if campuses and not any(c.get("is_main") for c in campuses) and len(campuses) == 1:
-                    campuses[0]["is_main"] = True
+
+                if campuses:
+                    best_idx = 0
+                    best_score = int(campuses[0].get("_score") or 0)
+                    for i, c in enumerate(campuses):
+                        sc = int(c.get("_score") or 0)
+                        if sc > best_score:
+                            best_score = sc
+                            best_idx = i
+                    campuses[best_idx]["is_main"] = True
+                for c in campuses:
+                    c.pop("_score", None)
         except Exception:
             campuses = []
 
