@@ -1836,6 +1836,8 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         # Fallback: institution_code + normalized_name
                         if not prog:
                             inst_code = (row.get("institution_code") or "").strip()
+                            if not inst_code and prog_code:
+                                inst_code = _derive_institution_code(prog_code)
                             prog_name = (row.get("program_normalized_name") or "").strip()
                             if inst_code and prog_name:
                                 inst = Institution.objects.filter(code=inst_code).first()

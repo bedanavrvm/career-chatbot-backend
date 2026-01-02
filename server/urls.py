@@ -1046,10 +1046,13 @@ def admin_etl_process(request):
                 "local_only_actions": local_only_actions,
             })
 
-        if action == "all" and os.getenv("ETL_RUN_ALL_ASYNC", "1").strip().lower() not in ("0", "false", "no"):
-            actions = [
-                "extract","extract-programs","transform","transform-programs","transform-normalize","dedup-programs","dq-report","load","all"
-            ]
+        async_actions_env = (os.getenv("ETL_ASYNC_ACTIONS", "") or "").strip()
+        if async_actions_env:
+            async_actions = [a.strip() for a in async_actions_env.split(",") if a.strip()]
+        else:
+            async_actions = ["all", "load", "dq-report"]
+
+        if action in async_actions and os.getenv("ETL_RUN_ALL_ASYNC", "1").strip().lower() not in ("0", "false", "no"):
             msg = []
             if job_running:
                 msg.append("ETL job already running")
@@ -1065,6 +1068,8 @@ def admin_etl_process(request):
                     "job_pid": job_pid,
                     "job_log_path": str(job_log_path) if job_log_path else "",
                     "job_log_tail": job_log_tail,
+                    "prod_mode": prod_mode,
+                    "local_only_actions": local_only_actions,
                 })
 
             log_fp = job_dir / f"admin_etl_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
@@ -1073,7 +1078,7 @@ def admin_etl_process(request):
                 "manage.py",
                 "kuccps_etl",
                 "--action",
-                "all",
+                action,
             ]
             if config_path:
                 cmd.extend(["--config", config_path])
@@ -1118,6 +1123,8 @@ def admin_etl_process(request):
                 "job_pid": p.pid,
                 "job_log_path": str(log_fp),
                 "job_log_tail": _tail_text(log_fp),
+                "prod_mode": prod_mode,
+                "local_only_actions": local_only_actions,
             })
 
         sys.path.append(str(etl_dir))
