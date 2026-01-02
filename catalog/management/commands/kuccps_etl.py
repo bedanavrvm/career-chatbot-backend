@@ -20,12 +20,22 @@ class Command(BaseCommand):
         inplace = bool(options.get("inplace"))
         dry_run = bool(options.get("dry_run"))
 
-        backend_dir = Path(__file__).resolve().parents[4]
+        cmd_file = Path(__file__).resolve()
+        backend_dir = cmd_file.parents[3]
+        # Robustly locate backend root (Render path layouts can differ)
+        for p in cmd_file.parents:
+            if (p / "manage.py").exists() and (p / "scripts" / "etl" / "kuccps" / "etl.py").exists():
+                backend_dir = p
+                break
         etl_dir = backend_dir / "scripts" / "etl" / "kuccps"
 
         import sys
 
-        sys.path.append(str(etl_dir))
+        if not (etl_dir / "etl.py").exists():
+            raise RuntimeError(f"KUCCPS ETL module not found at {etl_dir} (expected etl.py). backend_dir={backend_dir}")
+
+        if str(etl_dir) not in sys.path:
+            sys.path.append(str(etl_dir))
         from etl import (  # type: ignore
             Config,
             copy_inputs,
