@@ -1075,6 +1075,7 @@ def admin_etl_process(request):
             log_fp = job_dir / f"admin_etl_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
             cmd = [
                 sys.executable,
+                "-u",
                 "manage.py",
                 "kuccps_etl",
                 "--action",
@@ -1091,6 +1092,7 @@ def admin_etl_process(request):
                 p = subprocess.Popen(
                     cmd,
                     cwd=str(Path(__file__).resolve().parent.parent),
+                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
                     stdout=logf,
                     stderr=logf,
                     start_new_session=True,

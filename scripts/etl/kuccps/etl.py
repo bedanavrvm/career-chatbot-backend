@@ -1489,6 +1489,13 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         changes: Dict[str, int] = defaultdict(int)
         by_source: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
+        try:
+            progress_every = int((os.getenv("ETL_PROGRESS_EVERY", "500") or "500").strip() or "0")
+        except Exception:
+            progress_every = 500
+
+        logger.info("Starting load_csvs dry_run=%s processed_dir=%s", dry_run, cfg.processed_dir)
+
         def inc(key: str, sid: Optional[str] = None) -> None:
             changes[key] += 1
             if sid:
@@ -1649,7 +1656,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                 except Exception:
                     f.seek(0)
                     reader = csv.DictReader(f, delimiter="\t")
-                for row in reader:
+                for i, row in enumerate(reader, start=1):
                     inst_code = row.get("institution_code", "").strip()
                     field_name = row.get("field_name", "").strip()
                     # Map institution_code -> Institution FK; skip unsafe rows instead of violating NOT NULL
@@ -1713,6 +1720,8 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             inc("programs_updated", sid)
                         else:
                             inc("programs_unchanged", sid)
+                    if progress_every and i % progress_every == 0:
+                        logger.info("Loading programs... rows=%d created=%d updated=%d", i, changes.get("programs_created", 0), changes.get("programs_updated", 0))
         # Program costs
         cost_path = cfg.processed_dir / "program_costs.csv"
         if cost_path.exists():
@@ -1731,12 +1740,13 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                 except Exception:
                     f.seek(0)
                     reader = csv.DictReader(f, delimiter="\t")
-                rows = list(reader)
                 latest: Dict[str, Dict[str, str]] = {}
-                for r in rows:
+                for i, r in enumerate(reader, start=1):
                     code = (r.get("program_code") or "").strip()
                     if code:
                         latest[code] = r
+                    if progress_every and i % progress_every == 0:
+                        logger.info("Scanning program_costs... rows=%d unique_program_codes=%d", i, len(latest))
                 def _parse_currency_and_amount(raw: str) -> Tuple[Optional[Decimal], str]:
                     s = (raw or "").strip()
                     if not s:
@@ -1757,7 +1767,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                     except Exception:
                         return None, cur
 
-                for code, row in latest.items():
+                for i, (code, row) in enumerate(latest.items(), start=1):
                     raw_cost = (row.get("cost") or "").strip()
                     sid = (row.get("source_id") or "").strip() or "default"
                     amount, currency = _parse_currency_and_amount(raw_cost)
@@ -1815,6 +1825,8 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         if prev_num != new_meta["cost"] or str(prev_raw or "").strip() != new_meta["cost_raw"]:
                             prog.metadata = {**(meta or {}), **new_meta}
                             prog.save(update_fields=["metadata"])
+                    if progress_every and i % progress_every == 0:
+                        logger.info("Loading program_costs... rows=%d created=%d updated=%d", i, changes.get("program_costs_created", 0), changes.get("program_costs_updated", 0))
         # Cutoffs
         cut_path = cfg.processed_dir / "yearly_cutoffs.csv"
         if cut_path.exists():
@@ -1826,7 +1838,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                 except Exception:
                     dialect = csv.excel_tab if "\t" in sample else csv.excel
                 reader = csv.DictReader(f, dialect=dialect)
-                for row in reader:
+                for i, row in enumerate(reader, start=1):
                     try:
                         prog = None
                         # Preferred: program_code match
@@ -1845,6 +1857,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                                     prog = Program.objects.filter(institution=inst, normalized_name=prog_name).first()
                         if not prog:
                             logger.warning("Cutoff row skipped (program not found): %s", row)
+                            inc("yearly_cutoffs_skipped")
                             continue
                         sid = (row.get("source_id") or "").strip() or "default"
                         # Parse year
@@ -1852,6 +1865,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             year = int(str(row.get("year") or "").strip())
                         except Exception:
                             logger.warning("Cutoff row skipped (invalid year): %s", row)
+                            inc("yearly_cutoffs_skipped", sid)
                             continue
                         # Parse cutoff as Decimal, cleaning stray characters
                         cutoff_raw = str(row.get("cutoff") or "").strip()
@@ -1860,6 +1874,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             cutoff_val = Decimal(cutoff_clean)
                         except InvalidOperation:
                             logger.warning("Cutoff row skipped (invalid cutoff '%s'): %s", cutoff_raw, row)
+                            inc("yearly_cutoffs_skipped", sid)
                             continue
                         # Capacity (optional)
                         try:
@@ -1886,6 +1901,9 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                                 inc("yearly_cutoffs_unchanged", sid)
                     except Exception as e:
                         logger.warning("Cutoff row skipped (exception: %s): %s", e, row)
+                        inc("yearly_cutoffs_skipped")
+                    if progress_every and i % progress_every == 0:
+                        logger.info("Loading yearly_cutoffs... rows=%d created=%d updated=%d skipped=%d", i, changes.get("yearly_cutoffs_created", 0), changes.get("yearly_cutoffs_updated", 0), changes.get("yearly_cutoffs_skipped", 0))
         # Normalization rules
         norm_path = cfg.processed_dir / "normalization_rules.csv"
         if norm_path.exists():

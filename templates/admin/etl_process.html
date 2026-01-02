@@ -2,6 +2,11 @@
 {% block title %}ETL Process{% endblock %}
 {% block content %}
 <h1>ETL Process</h1>
+{% if job_running %}
+<script>
+  setTimeout(function () { window.location.reload(); }, 5000);
+</script>
+{% endif %}
 {% if error %}
 <div style="color:#a00">Error: {{ error }}</div>
 {% endif %}
