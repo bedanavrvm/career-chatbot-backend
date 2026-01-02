@@ -54,11 +54,12 @@ def extract_catalog_lookup(text: str) -> Dict[str, Any]:
         return {}
     low = s.lower()
     # Quick gate: allow (a) provider+offer context, (b) explicit degree phrases,
-    # or (c) generic "programs/courses in|on|for <field>" questions.
-    if not (('universit' in low or 'college' in low or 'institute' in low) and ('offer' in low or 'study' in low or 'offers' in low)):
+    # or (c) generic "programs/programmes/courses in|on|for <field>" questions.
+    if not ((('universit' in low or 'college' in low or 'institute' in low) and ('offer' in low or 'study' in low or 'offers' in low))):
         if not re.search(r"\b(bachelor|masters?|diploma|certificate)\b", low):
-            if not re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+", low):
-                return {}
+            if not re.search(r"\b(programs?|programmes?|courses?)\s+(in|on|for|about|related\s+to)\s+", low):
+                if not re.search(r"\b(programs?|programmes?|courses?)\s+in\s+the\s+field\s+of\s+", low):
+                    return {}
 
     # Capture explicit degree phrase first
     m = re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
@@ -84,9 +85,27 @@ def extract_catalog_lookup(text: str) -> Dict[str, Any]:
         return {'program_query': phrase, 'level': lvl}
 
     # Generic: "programs/courses in|on|for <field>"
-    m4 = re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
+    m4 = re.search(r"\b(programs?|programmes?|courses?)\s+(in|on|for|about)\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
     if m4:
         phrase = re.sub(r"\s+", " ", m4.group(3)).strip().lower()
+        if phrase in {'doctor', 'doctors', 'medicine doctor', 'medical doctor'}:
+            phrase = 'medicine'
+        return {'program_query': phrase, 'level': ''}
+
+    # Generic: "programs related to <field>" / "courses related to <field>"
+    m5 = re.search(r"\b(programs?|programmes?|courses?)\s+related\s+to\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
+    if m5:
+        phrase = re.sub(r"\s+", " ", m5.group(2)).strip().lower()
+        if phrase in {'doctor', 'doctors', 'medicine doctor', 'medical doctor'}:
+            phrase = 'medicine'
+        return {'program_query': phrase, 'level': ''}
+
+    # Generic: "programs in the field of <field>"
+    m6 = re.search(r"\b(programs?|programmes?|courses?)\s+in\s+the\s+field\s+of\s+([A-Za-z &/\-]+)", s, flags=re.IGNORECASE)
+    if m6:
+        phrase = re.sub(r"\s+", " ", m6.group(2)).strip().lower()
+        if phrase in {'doctor', 'doctors', 'medicine doctor', 'medical doctor'}:
+            phrase = 'medicine'
         return {'program_query': phrase, 'level': ''}
 
     return {}
@@ -262,7 +281,8 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
     # Catalog/program lookup intent: look for provider+offer phrasing or degree phrases
     if ((('universit' in s or 'college' in s or 'institute' in s) and ('offer' in s or 'offers' in s or 'study' in s))
          or re.search(r"\b(bachelor|masters?|diploma|certificate)\s+of\b", s)
-         or re.search(r"\b(programs?|courses?)\s+(in|on|for|about)\s+", s)
+         or re.search(r"\b(programs?|programmes?|courses?)\s+(in|on|for|about|related\s+to)\s+", s)
+         or re.search(r"\b(programs?|programmes?|courses?)\s+in\s+the\s+field\s+of\s+", s)
          or any(k in s for k in [
              'cutoff', 'cut off', 'cut-offs', 'points',
              'requirements', 'requirement', 'cluster', 'subjects',

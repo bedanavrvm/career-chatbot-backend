@@ -239,6 +239,72 @@ def api_programs(request):
         return JsonResponse({"detail": str(e)}, status=500)
 
 
+def api_catalog_institution_detail(request, institution_code: str):
+    """GET /api/catalog/institutions/<code>
+    Returns a DB-backed Institution detail payload including a list of programs offered.
+    """
+    if request.method != "GET":
+        return HttpResponseBadRequest("GET required")
+    try:
+        try:
+            from catalog.models import Institution, Program  # type: ignore
+        except Exception:
+            Institution = None  # type: ignore
+            Program = None  # type: ignore
+
+        if Institution is None or Program is None:
+            return JsonResponse({"detail": "Catalog DB not available"}, status=503)
+
+        code = (institution_code or "").strip()
+        if not code:
+            return JsonResponse({"detail": "Invalid institution code"}, status=400)
+
+        try:
+            inst = Institution.objects.get(code__iexact=code)
+        except Institution.DoesNotExist:
+            return JsonResponse({"detail": "Institution not found"}, status=404)
+
+        prog_qs = Program.objects.select_related("field").filter(institution_id=inst.id).order_by("normalized_name")
+        programs_total = int(prog_qs.count())
+        programs_rows = list(prog_qs[:200].values(
+            "id",
+            "code",
+            "name",
+            "normalized_name",
+            "level",
+            "campus",
+            "region",
+            "field__name",
+        ))
+        programs = []
+        for r in programs_rows:
+            programs.append({
+                "id": r.get("id"),
+                "program_code": (r.get("code") or ""),
+                "name": (r.get("name") or ""),
+                "normalized_name": (r.get("normalized_name") or ""),
+                "level": (r.get("level") or ""),
+                "campus": (r.get("campus") or ""),
+                "region": (r.get("region") or ""),
+                "field_name": (r.get("field__name") or ""),
+            })
+
+        payload = {
+            "code": inst.code,
+            "name": inst.name,
+            "alias": inst.alias,
+            "region": inst.region,
+            "county": inst.county,
+            "website": inst.website,
+            "metadata": inst.metadata or {},
+            "programs": programs,
+            "programs_count": programs_total,
+        }
+        return JsonResponse(payload)
+    except Exception as e:
+        return JsonResponse({"detail": str(e)}, status=500)
+
+
 def api_catalog_program_detail(request, program_id: int):
     """GET /api/catalog/programs/<id>
     Returns a DB-backed Program detail payload including institution info, costs, and all yearly cutoffs.
@@ -1467,6 +1533,7 @@ urlpatterns = [
     path('api/catalog/suffix-mapping', api_suffix_mapping, name='api_suffix_mapping'),
     path('api/catalog/program-costs', api_program_costs, name='api_program_costs'),
     path('api/catalog/programs/<int:program_id>', api_catalog_program_detail, name='api_catalog_program_detail'),
+    path('api/catalog/institutions/<str:institution_code>', api_catalog_institution_detail, name='api_catalog_institution_detail'),
     path('admin/etl/upload', admin_etl_upload, name='admin_etl_upload'),
     path('admin/etl/process', admin_etl_process, name='admin_etl_process'),
     # Conversations API

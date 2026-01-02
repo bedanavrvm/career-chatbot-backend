@@ -669,7 +669,7 @@ def session_recommendations(request, session_id):
                 if narrowed.exists():
                     qs = narrowed
 
-        # Score and pick top-k (cap scan to avoid heavy CPU on huge catalogs)
+        # Score candidates (cap scan to avoid heavy CPU on huge catalogs)
         scored = []
         for p in qs[:2000]:
             nm = (p.normalized_name or p.name or '').strip()
@@ -679,10 +679,16 @@ def session_recommendations(request, session_id):
                 sc += 0.2
             scored.append((sc, p))
         scored.sort(key=lambda t: (-t[0], (t[1].normalized_name or t[1].name or '')))
-        picked = scored[:k]
 
-        recs = []
-        for sc, p in picked:
+        # Build recommendations while applying eligibility-based filtering and competitive cutoff ordering.
+        # - Exclude eligibility=false entirely
+        # - Order: eligible first, then unknown
+        # - Within eligible: higher cutoff is considered more competitive, so show first
+        eligible_recs = []
+        unknown_recs = []
+
+        scan_limit = min(len(scored), max(k * 8, 80))
+        for sc, p in scored[:scan_limit]:
             nm = (p.normalized_name or p.name or '').strip()
             field_name = (p.field.name if getattr(p, 'field_id', None) else '') or ''
 
@@ -702,6 +708,9 @@ def session_recommendations(request, session_id):
                 cutoff_val = None
 
             elig = _eligibility_from_subject_requirements(p, grades, cutoff=cutoff_val)
+
+            if elig and elig.get('eligible') is False:
+                continue
 
             cost = None
             try:
@@ -723,7 +732,7 @@ def session_recommendations(request, session_id):
             except Exception:
                 req_preview = ''
 
-            recs.append({
+            item = {
                 'program_id': getattr(p, 'id', None),
                 'program_code': (p.code or '').strip(),
                 'program_name': nm,
@@ -738,7 +747,20 @@ def session_recommendations(request, session_id):
                 'requirements_preview': req_preview,
                 'cost': cost,
                 'latest_cutoff': cutoff,
-            })
+            }
+
+            if elig and elig.get('eligible') is True:
+                eligible_recs.append((cutoff_val, float(sc), item))
+            else:
+                unknown_recs.append((float(sc), cutoff_val, item))
+
+            if len(eligible_recs) + len(unknown_recs) >= k * 3:
+                break
+
+        eligible_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1]))
+        unknown_recs.sort(key=lambda t: (-t[0], -(t[1] if t[1] is not None else -1.0)))
+        recs = [x[2] for x in eligible_recs] + [x[2] for x in unknown_recs]
+        recs = recs[:k]
 
         return JsonResponse({
             'session_id': str(s.id),
