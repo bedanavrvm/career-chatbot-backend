@@ -322,10 +322,11 @@ def api_catalog_institution_detail(request, institution_code: str):
         return HttpResponseBadRequest("GET required")
     try:
         try:
-            from catalog.models import Institution, Program  # type: ignore
+            from catalog.models import Institution, Program, InstitutionCampus  # type: ignore
         except Exception:
             Institution = None  # type: ignore
             Program = None  # type: ignore
+            InstitutionCampus = None  # type: ignore
 
         if Institution is None or Program is None:
             return JsonResponse({"detail": "Catalog DB not available"}, status=503)
@@ -338,6 +339,36 @@ def api_catalog_institution_detail(request, institution_code: str):
             inst = Institution.objects.get(code__iexact=code)
         except Institution.DoesNotExist:
             return JsonResponse({"detail": "Institution not found"}, status=404)
+
+        campuses = []
+        try:
+            if InstitutionCampus is not None:
+                rows = list(InstitutionCampus.objects.filter(institution_id=inst.id).order_by("campus").values(
+                    "campus", "town", "county", "region",
+                ))
+                for r in rows:
+                    campus_name = (r.get("campus") or "").strip()
+                    town = (r.get("town") or "").strip()
+                    county = (r.get("county") or "").strip()
+                    region = (r.get("region") or "").strip()
+                    label_parts = [p for p in [campus_name, town, county, region, inst.name] if p]
+                    label = ", ".join(label_parts)
+                    is_main = False
+                    cn = campus_name.lower()
+                    if cn:
+                        is_main = ("main" in cn) or ("head" in cn) or ("central" in cn)
+                    campuses.append({
+                        "campus": campus_name,
+                        "town": town,
+                        "county": county,
+                        "region": region,
+                        "is_main": bool(is_main),
+                        "map_query": label,
+                    })
+                if campuses and not any(c.get("is_main") for c in campuses) and len(campuses) == 1:
+                    campuses[0]["is_main"] = True
+        except Exception:
+            campuses = []
 
         prog_qs = Program.objects.select_related("field").filter(institution_id=inst.id).order_by("normalized_name")
         programs_total = int(prog_qs.count())
@@ -372,6 +403,7 @@ def api_catalog_institution_detail(request, institution_code: str):
             "county": inst.county,
             "website": inst.website,
             "metadata": inst.metadata or {},
+            "campuses": campuses,
             "programs": programs,
             "programs_count": programs_total,
         }
