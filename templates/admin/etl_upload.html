@@ -4,15 +4,21 @@
 {% block content %}
 <h1>ETL Upload</h1>
 <p>Upload KUCCPS PDF/inputs to: <code>{{ upload_dir }}</code></p>
+{% if processed_dir %}
+<p>Upload processed bundle (.zip) to: <code>{{ processed_dir }}</code></p>
+{% endif %}
 {% if error %}
 <div style="color:#a00">Error: {{ error }}</div>
 {% endif %}
 {% if stored %}
 <div style="color:#070">Stored: {{ stored }}</div>
 {% endif %}
+{% if extracted %}
+<div style="color:#070">Extracted files: {{ extracted }}</div>
+{% endif %}
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
-  <p><input type="file" name="file" accept="application/pdf,application/octet-stream" required></p>
+  <p><input type="file" name="file" accept="application/pdf,application/zip,application/x-zip-compressed,application/octet-stream,.zip" required></p>
   <p><button type="submit" class="default">Upload</button></p>
 </form>
 <p><a href="/admin/etl/process">Go to Process</a></p>

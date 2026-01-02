@@ -26,6 +26,7 @@ import subprocess
 import base64
 import json
 import csv
+import zipfile
 from pathlib import Path
 import sys
 import math
@@ -886,18 +887,51 @@ def admin_etl_upload(request):
     """POST /admin/etl/upload (multipart/form-data)
     Saves uploaded file into KUCCPS raw/uploads and returns stored path.
     """
-    base = _processed_dir().parent / "raw" / "uploads"
+    etl_root = _processed_dir().parent
+    base = etl_root / "raw" / "uploads"
+    processed_dir = etl_root / "processed"
     if request.method == "GET":
         # Render an admin page with an upload form
-        return render(request, "admin/etl_upload.html", {"upload_dir": str(base)})
+        return render(request, "admin/etl_upload.html", {"upload_dir": str(base), "processed_dir": str(processed_dir)})
     try:
-        ctx = {"upload_dir": str(base)}
+        ctx = {"upload_dir": str(base), "processed_dir": str(processed_dir)}
         if not request.FILES:
             ctx["error"] = "No file provided"
             return render(request, "admin/etl_upload.html", ctx)
         fobj = next(iter(request.FILES.values()))
-        base.mkdir(parents=True, exist_ok=True)
         safe_name = os.path.basename(fobj.name).replace("..", "_")
+        ext = os.path.splitext(safe_name)[1].lower()
+
+        if ext == ".zip":
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            dest = processed_dir / safe_name
+            with open(dest, "wb") as out:
+                for chunk in fobj.chunks():
+                    out.write(chunk)
+            extracted = 0
+            with zipfile.ZipFile(dest, "r") as zf:
+                for member in zf.infolist():
+                    name = member.filename
+                    if not name or name.endswith("/"):
+                        continue
+                    p = Path(name)
+                    parts = list(p.parts)
+                    if parts and parts[0].lower() == "processed":
+                        parts = parts[1:]
+                    if not parts:
+                        continue
+                    target = (processed_dir / Path(*parts)).resolve()
+                    if processed_dir.resolve() not in target.parents and target != processed_dir.resolve():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member, "r") as src, open(target, "wb") as dst:
+                        dst.write(src.read())
+                    extracted += 1
+            ctx["stored"] = str(dest)
+            ctx["extracted"] = extracted
+            return render(request, "admin/etl_upload.html", ctx)
+
+        base.mkdir(parents=True, exist_ok=True)
         dest = base / safe_name
         with open(dest, "wb") as out:
             for chunk in fobj.chunks():
@@ -905,7 +939,7 @@ def admin_etl_upload(request):
         ctx["stored"] = str(dest)
         return render(request, "admin/etl_upload.html", ctx)
     except Exception as e:
-        return render(request, "admin/etl_upload.html", {"upload_dir": str(base), "error": str(e)})
+        return render(request, "admin/etl_upload.html", {"upload_dir": str(base), "processed_dir": str(processed_dir), "error": str(e)})
 
 
 @staff_member_required
@@ -954,24 +988,38 @@ def admin_etl_process(request):
     job_running = _pid_running(job_pid) if job_pid else False
     job_log_tail = _tail_text(job_log_path) if job_log_path else ""
 
+    full_actions = [
+        "extract",
+        "extract-programs",
+        "transform",
+        "transform-programs",
+        "transform-normalize",
+        "dedup-programs",
+        "dq-report",
+        "load",
+        "all",
+    ]
+
+    prod_mode = os.getenv("ETL_PRODUCTION_MODE", "").strip().lower() in ("1", "true", "yes")
+    allowed_env = (os.getenv("ETL_ALLOWED_ACTIONS", "") or "").strip()
+    if allowed_env:
+        allowed_actions = [a.strip() for a in allowed_env.split(",") if a.strip()]
+    elif prod_mode:
+        allowed_actions = ["load", "dq-report"]
+    else:
+        allowed_actions = full_actions
+    actions = [a for a in full_actions if a in set(allowed_actions)]
+    local_only_actions = [a for a in full_actions if a not in set(allowed_actions)]
+
     if request.method == "GET":
-        actions = [
-            "extract",
-            "extract-programs",
-            "transform",
-            "transform-programs",
-            "transform-normalize",
-            "dedup-programs",
-            "dq-report",
-            "load",
-            "all",
-        ]
         return render(request, "admin/etl_process.html", {
             "actions": actions,
             "job_running": job_running,
             "job_pid": job_pid,
             "job_log_path": str(job_log_path) if job_log_path else "",
             "job_log_tail": job_log_tail,
+            "prod_mode": prod_mode,
+            "local_only_actions": local_only_actions,
         })
     try:
         # Allow both JSON body and form submission
@@ -979,6 +1027,24 @@ def admin_etl_process(request):
         config_path = (request.POST.get("config") or "").strip()
         inplace = bool(request.POST.get("inplace"))
         dry_run = bool(request.POST.get("dry_run"))
+
+        if action not in actions:
+            msg = [f"Action '{action}' is not enabled on this server"]
+            return render(request, "admin/etl_process.html", {
+                "actions": actions,
+                "action": action,
+                "ran": False,
+                "messages": msg,
+                "config_value": config_path,
+                "inplace": inplace,
+                "dry_run": dry_run,
+                "job_running": job_running,
+                "job_pid": job_pid,
+                "job_log_path": str(job_log_path) if job_log_path else "",
+                "job_log_tail": job_log_tail,
+                "prod_mode": prod_mode,
+                "local_only_actions": local_only_actions,
+            })
 
         if action == "all" and os.getenv("ETL_RUN_ALL_ASYNC", "1").strip().lower() not in ("0", "false", "no"):
             actions = [
