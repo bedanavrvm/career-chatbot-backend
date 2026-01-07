@@ -84,6 +84,55 @@ class TestFSM(TestCase):
         ProgramRequirementOption.objects.create(group=g1, subject=subj_eng, subject_code='ENG', min_grade='C', order=0)
         return p
 
+    def test_qualify_specific_program_without_last_recommendations_returns_reasons_and_alternatives(self):
+        inst = Institution.objects.create(code='MED2', name='MED TEST UNIVERSITY', region='Nairobi', county='Nairobi')
+
+        field_med = Field.objects.create(name='Medicine')
+        p_med = Program.objects.create(
+            institution=inst,
+            field=field_med,
+            code='MED100',
+            name='BACHELOR OF MEDICINE AND BACHELOR OF SURGERY (MBCHB)',
+            normalized_name='BACHELOR OF MEDICINE AND BACHELOR OF SURGERY (MBCHB)',
+            level='bachelor',
+            campus='',
+            region='Nairobi',
+        )
+
+        subj_che = Subject.objects.create(code='CHE', name='Chemistry')
+        g_med = ProgramRequirementGroup.objects.create(program=p_med, name='Group 1', pick=1, order=0)
+        ProgramRequirementOption.objects.create(group=g_med, subject=subj_che, subject_code='CHE', min_grade='B', order=0)
+
+        field_nur = Field.objects.create(name='Nursing')
+        p_nur = Program.objects.create(
+            institution=inst,
+            field=field_nur,
+            code='NUR100',
+            name='BACHELOR OF SCIENCE IN NURSING',
+            normalized_name='BACHELOR OF SCIENCE IN NURSING',
+            level='bachelor',
+            campus='',
+            region='Nairobi',
+        )
+        subj_eng = Subject.objects.create(code='ENG', name='English')
+        g_nur = ProgramRequirementGroup.objects.create(program=p_nur, name='Group 1', pick=1, order=0)
+        ProgramRequirementOption.objects.create(group=g_nur, subject=subj_eng, subject_code='ENG', min_grade='C', order=0)
+
+        s = Session.objects.create(owner_uid='u_med', fsm_state='greeting', slots={})
+        Profile.objects.create(
+            session=s,
+            traits={'Social': 1.0, 'Investigative': 0.5},
+            grades={'MAT': 'A-', 'BIO': 'B-', 'ENG': 'B+'},
+            preferences={},
+        )
+
+        t = next_turn(s, 'Can I do medicine?', provider_override='local')
+        self.assertIn('do not qualify', t.reply.lower())
+        self.assertIn('common missing requirements', t.reply.lower())
+        self.assertIn('che', t.reply.lower())
+        self.assertIn('programs you qualify for right now', t.reply.lower())
+        self.assertIn('nursing', t.reply.lower())
+
     def test_fsm_happy_path(self):
         s = Session.objects.create()
         s.ensure_ttl()

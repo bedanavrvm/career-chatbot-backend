@@ -261,7 +261,12 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
         intents.append('help')
     if re.search(r"\bwhy\b", s) or s.strip() in ('why?', 'why'):
         intents.append('explain')
-    if any(k in s for k in ['qualify', 'qualified', 'qualification', 'eligible', 'eligibility']) or re.search(r"\bdo i qualify\b|\bam i eligible\b", s):
+    if (
+        any(k in s for k in ['qualify', 'qualified', 'qualification', 'eligible', 'eligibility'])
+        or re.search(r"\bdo i qualify\b|\bam i eligible\b", s)
+        or re.search(r"\bam i\s+(?:eligible|qualified)\s+for\b", s)
+        or re.search(r"\bcan i\s+(?:do|study|pursue|take|apply\s+for)\s+\b", s)
+    ):
         intents.append('qualify')
     if re.search(r"\bcareer\s+paths?\b", s) or any(k in s for k in ['possible career', 'career options', 'career direction']):
         intents.append('career_paths')

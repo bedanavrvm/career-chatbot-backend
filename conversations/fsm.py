@@ -677,13 +677,193 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
 
         last = slots.get('last_recommendations')
         if not isinstance(last, list) or not last:
-            return TurnResult(
-                reply="I can check eligibility for the programs I recommended last. Ask me for recommendations first, then say 'Which of these do I qualify for?'.",
-                next_state='recommend',
-                confidence=conf,
-                slots=slots,
-                nlp_payload=analysis,
-            )
+            # Support questions like: "Can I do medicine?" (no prior recommendation context).
+            lookup = analysis.get('lookup') or {}
+            goal_q = ''
+            try:
+                if isinstance(lookup, dict):
+                    goal_q = str(lookup.get('program_query') or lookup.get('goal') or '').strip()
+            except Exception:
+                goal_q = ''
+            if not goal_q:
+                try:
+                    import re
+
+                    low = (user_text or '').strip().lower()
+                    m = re.search(
+                        r"\bcan i\s+(?:do|study|pursue|take|apply\s+for)\s+([a-z0-9][a-z0-9\s\-\(\)&/]{1,80})\b",
+                        low,
+                    )
+                    if not m:
+                        m = re.search(r"\bam i\s+(?:eligible|qualified)\s+for\s+([a-z0-9][a-z0-9\s\-\(\)&/]{1,80})\b", low)
+                    goal_q = (m.group(1) if m else '').strip() if m else ''
+                except Exception:
+                    goal_q = ''
+
+            if not goal_q:
+                return TurnResult(
+                    reply="Which program or field should I check eligibility for? Example: 'Can I do medicine (MBChB)?'",
+                    next_state='recommend',
+                    confidence=conf,
+                    slots=slots,
+                    nlp_payload=analysis,
+                )
+
+            candidates = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text=goal_q)
+            if not isinstance(candidates, list) or not candidates:
+                return TurnResult(
+                    reply=f"I couldn't find KUCCPS catalog matches for '{goal_q}'. Try a more specific phrasing like 'medicine (MBChB)' or 'nursing'.",
+                    next_state='recommend',
+                    confidence=conf,
+                    slots=slots,
+                    nlp_payload=analysis,
+                )
+
+            try:
+                from catalog.models import Program  # type: ignore
+            except Exception:
+                Program = None  # type: ignore
+            if Program is None:
+                return TurnResult(
+                    reply="I can't access the catalog database right now to check eligibility.",
+                    next_state='recommend',
+                    confidence=conf,
+                    slots=slots,
+                    nlp_payload=analysis,
+                )
+
+            ids: List[int] = []
+            for r in candidates:
+                try:
+                    pid = r.get('program_id') if isinstance(r, dict) else None
+                    if pid is not None:
+                        ids.append(int(pid))
+                except Exception:
+                    continue
+            by_id: Dict[int, Any] = {}
+            if ids:
+                try:
+                    for p in Program.objects.filter(id__in=ids).prefetch_related(
+                        'requirement_groups',
+                        'requirement_groups__options',
+                        'requirement_groups__options__subject',
+                    ):
+                        by_id[int(p.id)] = p
+                except Exception:
+                    by_id = {}
+
+            eligible_rows: List[Tuple[str, Dict[str, Any]]] = []
+            unknown_titles: List[str] = []
+            not_eligible_missing: List[str] = []
+            checked = 0
+
+            for r in candidates:
+                if checked >= 5:
+                    break
+                if not isinstance(r, dict):
+                    continue
+                pid = r.get('program_id')
+                nm = (r.get('program_name') or '').strip()
+                inst = (r.get('institution_name') or '').strip()
+                title = f"{nm} — {inst}".strip(' -')
+
+                prog = None
+                try:
+                    prog = by_id.get(int(pid)) if pid is not None else None
+                except Exception:
+                    prog = None
+                if prog is None:
+                    unknown_titles.append(title)
+                    checked += 1
+                    continue
+
+                elig = _eligibility_for_program(prog, grades_map)
+                ok = elig.get('eligible')
+                missing = elig.get('missing') or []
+                if ok is True:
+                    eligible_rows.append((title, r))
+                elif ok is False and missing:
+                    not_eligible_missing.extend([str(x) for x in missing[:4]])
+                else:
+                    unknown_titles.append(title)
+                checked += 1
+
+            lines: List[str] = []
+            if eligible_rows:
+                lines.append(f"Yes — based on your saved grades, you qualify for {goal_q.title()} options like:")
+                for i, (title, _r) in enumerate(eligible_rows[:5], 1):
+                    lines.append(f"{i}. {title}")
+                if unknown_titles:
+                    lines.append("")
+                    lines.append("Some programs couldn't be eligibility-checked because requirements are missing in the catalog.")
+                return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
+            lines.append(f"Based on your saved grades, you likely do not qualify for {goal_q.title()} right now.")
+            if not_eligible_missing:
+                uniq = []
+                seen = set()
+                for x in not_eligible_missing:
+                    k = str(x).strip().upper()
+                    if not k or k in seen:
+                        continue
+                    seen.add(k)
+                    uniq.append(str(x))
+                    if len(uniq) >= 6:
+                        break
+                if uniq:
+                    lines.append(f"Common missing requirements: {', '.join(uniq)}")
+
+            # Provide alternatives the learner *can* do now (trait-driven, eligibility-checked).
+            alts = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text='')
+            alt_ids: List[int] = []
+            for a in (alts or []):
+                try:
+                    pid = a.get('program_id') if isinstance(a, dict) else None
+                    if pid is not None:
+                        alt_ids.append(int(pid))
+                except Exception:
+                    continue
+            by_id2: Dict[int, Any] = {}
+            if alt_ids:
+                try:
+                    for p in Program.objects.filter(id__in=alt_ids).prefetch_related(
+                        'requirement_groups',
+                        'requirement_groups__options',
+                        'requirement_groups__options__subject',
+                    ):
+                        by_id2[int(p.id)] = p
+                except Exception:
+                    by_id2 = {}
+
+            suggested: List[str] = []
+            for a in (alts or []):
+                if not isinstance(a, dict):
+                    continue
+                pid = a.get('program_id')
+                nm = (a.get('program_name') or '').strip()
+                inst = (a.get('institution_name') or '').strip()
+                title = f"{nm} — {inst}".strip(' -')
+                if not title:
+                    continue
+                prog = None
+                try:
+                    prog = by_id2.get(int(pid)) if pid is not None else None
+                except Exception:
+                    prog = None
+                if prog is None:
+                    continue
+                elig = _eligibility_for_program(prog, grades_map)
+                if elig.get('eligible') is True:
+                    suggested.append(title)
+                if len(suggested) >= 5:
+                    break
+            if suggested:
+                lines.append("")
+                lines.append("Here are some programs you qualify for right now:")
+                for i, t in enumerate(suggested, 1):
+                    lines.append(f"{i}. {t}")
+
+            return TurnResult(reply="\n".join(lines), next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
 
         try:
             from catalog.models import Program  # type: ignore
