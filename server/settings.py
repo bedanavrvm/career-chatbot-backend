@@ -14,6 +14,8 @@ from pathlib import Path
 import os
 import sys
 from urllib.parse import urlparse
+from django.core.exceptions import ImproperlyConfigured
+from cryptography.fernet import Fernet
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -53,6 +55,10 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 ]
+
+REST_FRAMEWORK = {
+    'EXCEPTION_HANDLER': 'utils.drf_exceptions.drf_exception_handler',
+}
 
 _rag_use_pgvector = os.getenv('RAG_USE_PGVECTOR', '0').strip().lower() in ('1', 'true', 'yes')
 _db_url_for_apps = os.getenv('DATABASE_URL', '').strip()
@@ -183,9 +189,20 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # TTL for conversation sessions (in minutes)
 CONV_SESSION_TTL_MINUTES = int(os.getenv('CONV_SESSION_TTL_MINUTES', '60') or '60')
 
+CHAT_PLANNER_ENABLED = os.getenv('CHAT_PLANNER_ENABLED', '0').strip().lower() in ('1', 'true', 'yes')
+CHAT_PLANNER_SHADOW_MODE = os.getenv('CHAT_PLANNER_SHADOW_MODE', '0').strip().lower() in ('1', 'true', 'yes')
+
 # Encryption key for PII at rest (Fernet URL-safe base64). If empty, plaintext will be stored.
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 PII_ENCRYPTION_KEY = os.getenv('PII_ENCRYPTION_KEY', '').strip()
+
+if not DEBUG and not RUNNING_TESTS:
+    if not PII_ENCRYPTION_KEY:
+        raise ImproperlyConfigured('PII_ENCRYPTION_KEY must be set in production')
+    try:
+        Fernet(PII_ENCRYPTION_KEY.encode('utf-8'))
+    except Exception as e:
+        raise ImproperlyConfigured('PII_ENCRYPTION_KEY is invalid') from e
 
 # --- NLP Settings ---
 # Confidence threshold for free-text parsing; below this we ask clarifying questions.

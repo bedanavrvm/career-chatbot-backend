@@ -311,7 +311,7 @@ def _normalize_intents(intents: Any) -> List[str]:
         'recommendations': 'recommend',
         'recommendation': 'recommend',
         'career_path': 'recommend',
-        'career_paths': 'recommend',
+        'career_paths': 'career_paths',
         'careerpath': 'recommend',
         'careerpaths': 'recommend',
         'career_guidance': 'recommend',

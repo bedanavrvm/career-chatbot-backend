@@ -1,9 +1,7 @@
 import os
-import json
-import csv
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from django.test import TestCase, Client, override_settings
+from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
 
 
@@ -13,87 +11,69 @@ class PublicApiTests(TestCase):
         # Ensure CSRF is bypassed for admin ETL endpoints during tests
         os.environ["DISABLE_CSRF_DEV"] = "true"
 
-    def _setup_processed_dir(self):
+        from catalog.models import Institution, Field, Program
+
+        inst = Institution.objects.create(
+            code="1170",
+            name="MACHAKOS UNIVERSITY",
+            alias="MKSU",
+            region="Eastern",
+            county="Machakos",
+            website="https://mksu.ac.ke",
+        )
+        field = Field.objects.create(name="Engineering")
+        Program.objects.create(
+            institution=inst,
+            field=field,
+            code="1170114",
+            name="BSc Civil Engineering",
+            normalized_name="BSC CIVIL ENGINEERING",
+            level="bachelor",
+            region="Eastern",
+            campus="Main",
+            award="BSc",
+            subject_requirements={},
+            metadata={},
+        )
+
+    def _setup_admin_etl_dirs(self):
         tmp = TemporaryDirectory()
         base = Path(tmp.name)
         processed = base / "processed"
         processed.mkdir(parents=True, exist_ok=True)
-        # Institutions
-        with (processed / "institutions.csv").open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["code", "name", "alias", "region", "county", "country", "website"])
-            w.writerow(["1170", "MACHAKOS UNIVERSITY", "MKSU", "Eastern", "Machakos", "Kenya", "https://mksu.ac.ke"]) 
-        # Fields
-        with (processed / "fields.csv").open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["name", "parent", "description"])
-            w.writerow(["Engineering", "", ""])
-        # Programs (deduped preferred)
-        with (processed / "programs_deduped.csv").open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["program_code", "institution_code", "institution_name", "name", "normalized_name", "field_name", "level", "region", "campus"]) 
-            w.writerow(["1170114", "1170", "MACHAKOS UNIVERSITY", "BSc Civil Engineering", "BSC CIVIL ENGINEERING", "Engineering", "bachelor", "Eastern", "Main"]) 
-        # Point APIs at this processed dir
+        # Point admin ETL pages at this processed dir so uploads/logs do not write into the repo.
         os.environ["KUCCPS_PROCESSED_DIR"] = str(processed)
         return tmp
 
     def test_institutions_endpoint(self):
-        tmp = self._setup_processed_dir()
-        try:
-            try:
-                from catalog.models import Institution
-                Institution.objects.create(
-                    code="1170",
-                    name="MACHAKOS UNIVERSITY",
-                    alias="MKSU",
-                    region="Eastern",
-                    county="Machakos",
-                    website="https://mksu.ac.ke",
-                )
-            except Exception:
-                pass
-            resp = self.client.get("/api/etl/institutions", {"q": "machakos"})
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertGreaterEqual(data.get("count", 0), 1)
-        finally:
-            tmp.cleanup()
+        resp = self.client.get("/api/etl/institutions", {"q": "machakos"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertGreaterEqual(data.get("count", 0), 1)
 
     def test_fields_endpoint(self):
-        tmp = self._setup_processed_dir()
-        try:
-            resp = self.client.get("/api/etl/fields", {"q": "engineer"})
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertGreaterEqual(data.get("count", 0), 1)
-        finally:
-            tmp.cleanup()
+        resp = self.client.get("/api/etl/fields", {"q": "engineer"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertGreaterEqual(data.get("count", 0), 1)
 
     def test_programs_endpoint(self):
-        tmp = self._setup_processed_dir()
-        try:
-            resp = self.client.get("/api/etl/programs", {"q": "civil", "level": "bachelor"})
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertGreaterEqual(data.get("count", 0), 1)
-            self.assertTrue(len(data.get("results", [])) <= 20)
-        finally:
-            tmp.cleanup()
+        resp = self.client.get("/api/etl/programs", {"q": "civil", "level": "bachelor"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertGreaterEqual(data.get("count", 0), 1)
+        self.assertTrue(len(data.get("results", [])) <= 20)
 
     def test_search_endpoint(self):
-        tmp = self._setup_processed_dir()
-        try:
-            resp = self.client.get("/api/etl/search", {"q": "engineering"})
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertIn("programs", data)
-            self.assertIn("institutions", data)
-            self.assertIn("fields", data)
-        finally:
-            tmp.cleanup()
+        resp = self.client.get("/api/etl/search", {"q": "engineering"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("programs", data)
+        self.assertIn("institutions", data)
+        self.assertIn("fields", data)
 
     def test_admin_upload_and_process_pages(self):
-        tmp = self._setup_processed_dir()
+        tmp = self._setup_admin_etl_dirs()
         try:
             # Create staff user and login
             User = get_user_model()

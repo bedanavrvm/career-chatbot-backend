@@ -1,18 +1,18 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.conf import settings
 import math
-import os
-import base64
-import json
 import logging
-import firebase_admin
-from firebase_admin import auth as fb_auth, credentials
+import json
 from .models import UserProfile, OnboardingProfile
 from .serializers import UserProfileSerializer, OnboardingProfileSerializer
+from .auth import get_bearer_token, firebase_init_error, verify_firebase_id_token
+
+from utils.drf_auth import FirebaseAuthentication, IsFirebaseAuthenticated
+from utils.errors import error_response
 
 try:
     from scripts.etl.kuccps.grades import normalize_grade as _kcse_normalize_grade  # type: ignore
@@ -22,82 +22,34 @@ except Exception:
     _kcse_grade_points = None
 
 
-_FIREBASE_INIT_ERROR: str = ''
-
 _logger = logging.getLogger(__name__)
 
 
-# Ensure Firebase Admin is initialized (in case urls init didn't run yet)
-if not firebase_admin._apps:
-    b64 = os.getenv('FIREBASE_CREDENTIALS_JSON_B64')
-    if b64:
-        try:
-            data = json.loads(base64.b64decode(b64).decode('utf-8'))
-            cred = credentials.Certificate(data)
-            firebase_admin.initialize_app(cred)
-        except Exception:
-            pass
+def _firebase_unavailable_response() -> Response:
+    detail = 'Firebase admin not initialized'
+    ferr = firebase_init_error()
+    if ferr:
+        detail = f"{detail}: {ferr}"
+    return error_response(detail, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, code='firebase_unavailable')
 
 
-def _ensure_firebase_initialized() -> bool:
-    global _FIREBASE_INIT_ERROR
-    if firebase_admin._apps:
-        return True
+def _require_claims(request):
+    claims = getattr(request, 'auth', None)
+    if isinstance(claims, dict) and claims.get('uid'):
+        return claims, None
 
-    path = (os.getenv('FIREBASE_CREDENTIALS_JSON_PATH') or os.getenv('GOOGLE_APPLICATION_CREDENTIALS') or '').strip()
-    if path:
-        try:
-            cred = credentials.Certificate(path)
-            firebase_admin.initialize_app(cred)
-            _FIREBASE_INIT_ERROR = ''
-            return True
-        except Exception as e:
-            _FIREBASE_INIT_ERROR = f"{e.__class__.__name__}: {str(e)}".strip()
-            return False
+    user = getattr(request, 'user', None)
+    user_claims = getattr(user, 'claims', None) if user else None
+    if isinstance(user_claims, dict) and user_claims.get('uid'):
+        return user_claims, None
 
-    b64 = os.getenv('FIREBASE_CREDENTIALS_JSON_B64')
-    if not b64:
-        _FIREBASE_INIT_ERROR = 'Missing FIREBASE_CREDENTIALS_JSON_B64'
-        return False
-    try:
-        data = json.loads(base64.b64decode(b64).decode('utf-8'))
-        cred = credentials.Certificate(data)
-        firebase_admin.initialize_app(cred)
-        _FIREBASE_INIT_ERROR = ''
-        return True
-    except Exception as e:
-        # Keep message minimal to avoid leaking credential contents
-        _FIREBASE_INIT_ERROR = f"{e.__class__.__name__}: {str(e)}".strip()
-        return False
-
-
-def _get_token_from_request(request):
-    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-    if auth_header:
-        parts = auth_header.split(' ', 1)
-        if len(parts) == 2 and parts[0].strip().lower() == 'bearer':
-            return parts[1].strip()
-
-    if request.method in ('POST', 'PUT', 'PATCH'):
-        body = {}
-        if hasattr(request, 'data'):
-            try:
-                body = request.data or {}
-            except Exception:
-                body = {}
-        else:
-            try:
-                raw = request.body.decode('utf-8') if hasattr(request, 'body') else ''
-                body = json.loads(raw or '{}') if raw else {}
-            except Exception:
-                body = {}
-        for key in ('id_token', 'token', 'access_token', 'accessToken'):
-            token = (body.get(key) or '').strip() if isinstance(body, dict) else ''
-            if token:
-                return token
-
-    token = (request.GET.get('id_token') or request.GET.get('token') or '').strip()
-    return token
+    token = get_bearer_token(request)
+    claims, err, http_status = verify_firebase_id_token(token)
+    if err:
+        if int(http_status or 0) == 503:
+            return None, _firebase_unavailable_response()
+        return None, error_response(str(err), status_code=status.HTTP_401_UNAUTHORIZED, code='unauthorized')
+    return claims, None
 
 
 def _upsert_profile_from_claims(claims):
@@ -121,24 +73,13 @@ def _upsert_profile_from_claims(claims):
 
 
 @api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def register(request):
     """Create a user profile if it doesn't exist; otherwise return existing."""
-    token = _get_token_from_request(request)
-    if not token:
-        return Response({"detail": "Missing id_token"}, status=status.HTTP_400_BAD_REQUEST)
-    if not _ensure_firebase_initialized():
-        detail = "Firebase admin not initialized"
-        if _FIREBASE_INIT_ERROR:
-            detail = f"{detail}: {_FIREBASE_INIT_ERROR}"
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    try:
-        claims = fb_auth.verify_id_token(token)
-    except Exception as e:
-        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
-        detail = "Invalid token"
-        if settings.DEBUG:
-            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+    claims, err = _require_claims(request)
+    if err:
+        return err
 
     try:
         profile = _upsert_profile_from_claims(claims)
@@ -147,16 +88,16 @@ def register(request):
         detail = "Database not initialized"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return error_response(detail, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, code='db_unavailable')
     except Exception as e:
         _logger.exception("Unexpected error during register profile upsert: %s: %s", e.__class__.__name__, str(e))
         detail = "Server error"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
     if not profile:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+        return error_response("Invalid token", status_code=status.HTTP_401_UNAUTHORIZED, code='invalid_token')
     return Response(UserProfileSerializer(profile).data)
 
 # ------------------------------
@@ -164,22 +105,9 @@ def register(request):
 # ------------------------------
 
 def _require_user(request):
-    token = _get_token_from_request(request)
-    if not token:
-        return None, Response({"detail": "Missing bearer token"}, status=status.HTTP_401_UNAUTHORIZED)
-    if not _ensure_firebase_initialized():
-        detail = "Firebase admin not initialized"
-        if _FIREBASE_INIT_ERROR:
-            detail = f"{detail}: {_FIREBASE_INIT_ERROR}"
-        return None, Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    try:
-        claims = fb_auth.verify_id_token(token)
-    except Exception as e:
-        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
-        detail = "Invalid token"
-        if settings.DEBUG:
-            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return None, Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+    claims, err = _require_claims(request)
+    if err:
+        return None, err
 
     try:
         profile = _upsert_profile_from_claims(claims)
@@ -188,16 +116,16 @@ def _require_user(request):
         detail = "Database not initialized"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return None, Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return None, error_response(detail, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, code='db_unavailable')
     except Exception as e:
         _logger.exception("Unexpected error during request user upsert: %s: %s", e.__class__.__name__, str(e))
         detail = "Server error"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return None, Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return None, error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
     if not profile:
-        return None, Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+        return None, error_response("Invalid token", status_code=status.HTTP_401_UNAUTHORIZED, code='invalid_token')
     return profile, None
 
 
@@ -311,6 +239,8 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
 
 
 @api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def onboarding_me(request):
     """Return current user's onboarding profile (creates one if missing)."""
     user, err = _require_user(request)
@@ -321,6 +251,8 @@ def onboarding_me(request):
 
 
 @api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def onboarding_save(request):
     """Upsert onboarding data for the current user.
 
@@ -354,6 +286,8 @@ def onboarding_save(request):
 
 
 @api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def onboarding_dashboard(request):
     """Compute and return a dashboard summary for the current user.
 
@@ -390,24 +324,13 @@ def onboarding_dashboard(request):
 
 
 @api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def login(request):
     """Verify token and upsert profile (Firebase handles auth)."""
-    token = _get_token_from_request(request)
-    if not token:
-        return Response({"detail": "Missing id_token"}, status=status.HTTP_400_BAD_REQUEST)
-    if not _ensure_firebase_initialized():
-        detail = "Firebase admin not initialized"
-        if _FIREBASE_INIT_ERROR:
-            detail = f"{detail}: {_FIREBASE_INIT_ERROR}"
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    try:
-        claims = fb_auth.verify_id_token(token)
-    except Exception as e:
-        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
-        detail = "Invalid token"
-        if settings.DEBUG:
-            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+    claims, err = _require_claims(request)
+    if err:
+        return err
 
     try:
         profile = _upsert_profile_from_claims(claims)
@@ -416,37 +339,26 @@ def login(request):
         detail = "Database not initialized"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return error_response(detail, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, code='db_unavailable')
     except Exception as e:
         _logger.exception("Unexpected error during login profile upsert: %s: %s", e.__class__.__name__, str(e))
         detail = "Server error"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
     if not profile:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+        return error_response("Invalid token", status_code=status.HTTP_401_UNAUTHORIZED, code='invalid_token')
     return Response(UserProfileSerializer(profile).data)
 
 
 @api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def me(request):
-    token = _get_token_from_request(request)
-    if not token:
-        return Response({"detail": "Missing bearer token"}, status=status.HTTP_401_UNAUTHORIZED)
-    if not _ensure_firebase_initialized():
-        detail = "Firebase admin not initialized"
-        if _FIREBASE_INIT_ERROR:
-            detail = f"{detail}: {_FIREBASE_INIT_ERROR}"
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    try:
-        claims = fb_auth.verify_id_token(token)
-    except Exception as e:
-        _logger.warning("Firebase verify_id_token failed: %s: %s", e.__class__.__name__, str(e))
-        detail = "Invalid token"
-        if settings.DEBUG:
-            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_401_UNAUTHORIZED)
+    claims, err = _require_claims(request)
+    if err:
+        return err
 
     try:
         profile = _upsert_profile_from_claims(claims)
@@ -455,14 +367,14 @@ def me(request):
         detail = "Database not initialized"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return error_response(detail, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, code='db_unavailable')
     except Exception as e:
         _logger.exception("Unexpected error during me profile upsert: %s: %s", e.__class__.__name__, str(e))
         detail = "Server error"
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
-        return Response({"detail": detail}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
     if not profile:
-        return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+        return error_response("Invalid token", status_code=status.HTTP_401_UNAUTHORIZED, code='invalid_token')
     return Response(UserProfileSerializer(profile).data)

@@ -26,6 +26,8 @@ media/
 venv/
 .env
 .env.*
+*firebase-adminsdk*.json
+*serviceAccount*.json
 
 # OS
 .DS_Store

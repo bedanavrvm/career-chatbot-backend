@@ -444,8 +444,23 @@ def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int
     if gt:
         toks = [t for t in ''.join((ch if ch.isalnum() else ' ') for ch in gt).split() if len(t) >= 4]
         if toks:
-            stop = {'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work'}
+            stop = {
+                'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work',
+                'program', 'programs', 'programme', 'programmes', 'course', 'courses', 'recommend', 'recommended', 'recommendations',
+                'what', 'which', 'please', 'tell', 'give', 'show',
+            }
             toks2 = [t for t in toks if t not in stop]
+
+            # Expand common career goal terms so user-friendly goals match catalog naming.
+            # Example: "medicine" should match MBChB/clinical/hospital terms.
+            s = set(toks2)
+            if any(t in s for t in {'medicine', 'medical', 'doctor', 'doctors', 'physician', 'clinical', 'surgeon', 'surgery'}):
+                toks2.extend(['mbchb', 'medicine', 'medical', 'clinical', 'hospital', 'surgery', 'dental', 'pharmacy', 'nursing'])
+            if any(t in s for t in {'dentist', 'dental'}):
+                toks2.extend(['dental', 'bds', 'surgery'])
+            if any(t in s for t in {'pharmacy', 'pharmacist'}):
+                toks2.extend(['pharmacy', 'pharm'])
+            toks2 = [t for t in toks2 if t and len(t) >= 3]
 
     if Q is not None and (traits_sorted or toks2):
         hints: List[str] = []
@@ -482,7 +497,7 @@ def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int
             txt = f"{nm} {field_name}".lower()
             hits2 = sum(1 for t in set(toks2[:12]) if t in txt)
             if hits2 > 0:
-                sc += min(1.0, 0.25 * float(hits2))
+                sc += min(2.0, 0.6 * float(hits2))
         scored.append((float(sc), p))
 
     if not scored:

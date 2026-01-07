@@ -203,6 +203,18 @@ def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
     if traits and not (prof.traits or {}):
         prof.traits = traits
         changed = True
+
+    if not (prof.grades or {}):
+        try:
+            hs = ob.high_school or {}
+            grades = hs.get('subject_grades') if isinstance(hs, dict) else None
+            if isinstance(grades, dict) and grades:
+                gmap = {str(k).strip().upper(): str(v).strip().upper().replace(' ', '') for k, v in grades.items() if str(k).strip()}
+                if gmap:
+                    prof.grades = gmap
+                    changed = True
+        except Exception:
+            pass
     if prefs:
         curp = prof.preferences or {}
         if not isinstance(curp, dict):
@@ -215,14 +227,14 @@ def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
             prof.preferences = merged
             changed = True
     if changed:
-        prof.save(update_fields=['traits', 'preferences', 'updated_at'])
+        prof.save(update_fields=['traits', 'grades', 'preferences', 'updated_at'])
 
 
 def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
     """Compute the next assistant reply/state from user_text using lightweight NLP.
     - Updates session slots and profile (grades/traits) deterministically.
     - Applies a confidence threshold to trigger clarifying prompts.
-    States: greeting -> collect_grades -> collect_interests -> summarize
+    States: greeting -> collect_interests -> summarize
     """
     analysis = nlp.analyze(user_text, provider_override=provider_override)
     conf = float(analysis.get('confidence') or 0.0)
@@ -389,6 +401,10 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         threshold = 0.4
     state = (session.fsm_state or 'greeting').strip().lower()
 
+    # Backward-compat: older sessions may still have this state.
+    if state == 'collect_grades':
+        state = 'collect_interests'
+
     # Global fast-path: answer catalog lookups immediately in any state
     # (e.g., "best universities that offer Bachelor of Arts").
     # This ensures it's not blocked by grade/interest collection.
@@ -399,11 +415,29 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         return TurnResult(
             reply=("I can help with recommendations. Could you share some KCSE grades? "
                    "For example: 'Math A-, English B+, Chemistry B'."),
-            next_state='collect_grades',
+            next_state='collect_interests',
             confidence=conf,
             slots=slots,
             nlp_payload=analysis,
         )
+
+    def _goal_text_for_recommendation() -> str:
+        goals = _get_career_goals()
+        parts = [g for g in goals if str(g).strip()]
+
+        # Strongly weight the user's current query when they are explicitly asking
+        # for programs/careers (e.g., "medicine") so results aren't driven only by traits.
+        if 'recommend' in intents:
+            lookup = analysis.get('lookup') or {}
+            program_query = str((lookup.get('program_query') or '')).strip()
+            if program_query:
+                parts.append(program_query)
+            else:
+                txt = str(user_text or '').strip()
+                if 0 < len(txt) <= 80:
+                    parts.append(txt)
+
+        return " ".join(parts).strip()
 
     def greet() -> TurnResult:
         return TurnResult(
@@ -441,7 +475,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
         itxt = ", ".join(list(tuse.keys())) or "(none)"
         goals = _get_career_goals()
-        goal_text = " ".join([g for g in goals if str(g).strip()]).strip()
+        goal_text = _goal_text_for_recommendation()
         recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text)
         # Persist the last recommendation set for follow-ups like "Why?" and "Which do I qualify for?"
         try:
@@ -587,6 +621,29 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 nlp_payload=analysis,
             )
 
+        kind = str(slots.get('last_reply_kind') or '').strip()
+        if kind in ('catalog_lookup', 'catalog_lookup_empty'):
+            q = str(slots.get('last_catalog_query') or '').strip()
+            cnt = slots.get('last_catalog_count')
+            try:
+                cnti = int(cnt) if cnt is not None else None
+            except Exception:
+                cnti = None
+            if kind == 'catalog_lookup_empty':
+                msg = f"I couldn't find catalog matches for '{q}'."
+                if not q:
+                    msg = "I couldn't find catalog matches for your last query."
+                msg += " This usually happens when the query is too broad or the wording doesn't match the catalog names."
+                msg += " Try a more specific phrase (e.g., 'MBChB', 'Bachelor of Pharmacy', 'Dental Surgery')."
+                return TurnResult(reply=msg, next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+            msg = "The previous answer was a catalog lookup."
+            if q:
+                msg += f" Query: '{q}'."
+            if cnti is not None:
+                msg += f" Matches found: {cnti}."
+            msg += " I listed the closest matches from the KUCCPS catalog; ask for 'requirements', 'cutoff', or 'fees' for any item." 
+            return TurnResult(reply=msg, next_state='recommend', confidence=conf, slots=slots, nlp_payload=analysis)
+
         last = slots.get('last_recommendations')
         if not isinstance(last, list) or not last:
             return TurnResult(
@@ -612,7 +669,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         if not isinstance(grades_map, dict) or not grades_map:
             return TurnResult(
                 reply="To check eligibility, please share your KCSE grades (e.g., 'Math A-, English B+, Biology B').",
-                next_state='collect_grades',
+                next_state='collect_interests',
                 confidence=conf,
                 slots=slots,
                 nlp_payload=analysis,
@@ -786,12 +843,26 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 nlp_payload=analysis,
             )
 
+        slots['last_reply_kind'] = 'catalog_lookup'
+        slots['last_catalog_query'] = str(qtext)
         docs = []
         if retrieve_catalog_documents:
             try:
                 docs = retrieve_catalog_documents(qtext, level=level, limit=8)
             except Exception:
                 docs = []
+
+        if not docs:
+            lowq = (qtext or '').strip().lower()
+            if any(t in lowq for t in ('medicine', 'medical', 'doctor', 'doctors', 'physician', 'surgeon', 'surgery')) and retrieve_catalog_documents:
+                try:
+                    q2 = 'medicine mbchb surgery dental pharmacy nursing'
+                    docs = retrieve_catalog_documents(q2, level=level, limit=8)
+                    if docs:
+                        qtext = q2
+                        slots['last_catalog_query'] = str(qtext)
+                except Exception:
+                    docs = []
 
         analysis['rag'] = {
             'query': qtext,
@@ -800,7 +871,10 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
             'sources': [d.get('meta') or {} for d in (docs or [])],
         }
 
+        slots['last_catalog_count'] = len(docs)
+
         if not docs:
+            slots['last_reply_kind'] = 'catalog_lookup_empty'
             return TurnResult(
                 reply=(f"I couldn't find catalog matches for '{qtext}'. Try a different phrasing or include the level (bachelor/diploma/certificate)."),
                 next_state=state,
@@ -816,13 +890,16 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
                 composed = _gem_rag_compose(user_text, docs, api_key=api_key, model_name=model_name) if api_key else ''
                 if composed:
-                    return TurnResult(
-                        reply=composed,
-                        next_state='recommend',
-                        confidence=conf,
-                        slots=slots,
-                        nlp_payload=analysis,
-                    )
+                    c_low = composed.strip().lower()
+                    if ('cannot recommend' not in c_low) and ("can't recommend" not in c_low):
+                        return TurnResult(
+                            reply=composed,
+                            next_state='recommend',
+                            confidence=conf,
+                            slots=slots,
+                            nlp_payload=analysis,
+                        )
+                    # Fall back to deterministic local listing below.
             except Exception:
                 pass
 
@@ -1080,23 +1157,6 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         if 'help' in intents or 'greeting' in intents:
             return greet()
         return greet()
-
-    if state == 'collect_grades':
-        if 'catalog_lookup' in intents:
-            return catalog_lookup()
-        if 'institutions_by_region' in intents:
-            return institutions_by_region()
-        if 'programs_near_me' in intents:
-            return programs_near_me()
-        if 'recommend' in intents or 'next' in intents or 'help' in intents or traits:
-            return recommend()
-        if grades:
-            if 'recommend' in intents or 'next' in intents or 'help' in intents:
-                return recommend()
-            return ask_for_interests()
-        if conf < threshold and not traits:
-            return ask_for_grades()
-        return ask_for_interests()
 
     if state == 'collect_interests':
         if 'catalog_lookup' in intents:

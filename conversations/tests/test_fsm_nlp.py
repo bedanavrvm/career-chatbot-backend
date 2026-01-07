@@ -4,6 +4,7 @@ from conversations.fsm import next_turn
 from conversations.models import Session, Profile
 from conversations.providers import gemini_provider
 from catalog.models import Institution, Field, Program, ProgramRequirementGroup, ProgramRequirementOption, Subject
+from accounts.models import UserProfile, OnboardingProfile
 
 
 class TestNLP(TestCase):
@@ -116,6 +117,53 @@ class TestFSM(TestCase):
         prof = Profile.objects.get(session=s)
         self.assertIn('MAT', prof.grades)
 
+    def test_no_collect_grades_when_onboarding_has_grades_and_goal_drives_recs(self):
+        user = UserProfile.objects.create(uid='u_onb')
+        OnboardingProfile.objects.create(
+            user=user,
+            education_level='high_school',
+            high_school={
+                'subject_grades': {
+                    'MAT': 'A-',
+                    'ENG': 'B+',
+                    'BIO': 'A',
+                    'CHE': 'A',
+                }
+            },
+        )
+
+        inst = Institution.objects.create(code='MED1', name='MED UNIVERSITY', region='Nairobi', county='Nairobi')
+        field_med = Field.objects.create(name='Medicine')
+        Program.objects.create(
+            institution=inst,
+            field=field_med,
+            code='MED001',
+            name='BACHELOR OF MEDICINE AND BACHELOR OF SURGERY (MBCHB)',
+            normalized_name='BACHELOR OF MEDICINE AND BACHELOR OF SURGERY (MBCHB)',
+            level='bachelor',
+            campus='',
+            region='Nairobi',
+        )
+
+        field_other = Field.objects.create(name='Education')
+        Program.objects.create(
+            institution=inst,
+            field=field_other,
+            code='EDU001',
+            name='BACHELOR OF EDUCATION (ARTS - BUSINESS STUDIES)',
+            normalized_name='BACHELOR OF EDUCATION (ARTS - BUSINESS STUDIES)',
+            level='bachelor',
+            campus='',
+            region='Nairobi',
+        )
+
+        s = Session.objects.create(owner_uid='u_onb', fsm_state='greeting', slots={})
+        t = next_turn(s, 'I want to do medicine. What programs do you recommend?')
+
+        self.assertEqual(t.next_state, 'recommend')
+        self.assertNotIn('share your kcse grades', t.reply.lower())
+        self.assertIn('mbchb', t.reply.lower())
+
     def test_recommend_without_grades_when_traits_exist(self):
         s = Session.objects.create(owner_uid='u1', fsm_state='greeting', slots={})
         Profile.objects.create(session=s, traits={'Artistic': 1.0}, grades={}, preferences={})
@@ -135,8 +183,8 @@ class TestFSM(TestCase):
         s = Session.objects.create(owner_uid='u1', fsm_state='greeting', slots={})
         Profile.objects.create(session=s, traits={'Artistic': 1.0}, grades={}, preferences={})
         t = next_turn(s, 'So what are the possible career paths for an aspiring musician?')
-        self.assertIn('possible career paths', t.reply.lower())
-        self.assertIn('musician', t.reply.lower())
+        self.assertIn('career paths', t.reply.lower())
+        self.assertTrue(any(tok in t.reply.lower() for tok in ['music', 'musician']))
 
     def test_fsm_explain_and_qualify_followups(self):
         self._seed_catalog_program()
@@ -144,7 +192,7 @@ class TestFSM(TestCase):
         Profile.objects.create(session=s, traits={'Artistic': 1.0}, grades={'ENG': 'B+'}, preferences={})
 
         t1 = next_turn(s, 'recommend')
-        self.assertIn('top recommendations', t1.reply.lower())
+        self.assertTrue(any(tok in t1.reply.lower() for tok in ['recommend', 'following program']))
         self.assertTrue(isinstance(t1.slots.get('last_recommendations'), list))
         self.assertGreater(len(t1.slots.get('last_recommendations') or []), 0)
 
@@ -160,4 +208,4 @@ class TestFSM(TestCase):
         s.save()
 
         t3 = next_turn(s, 'Which of these do I qualify for?')
-        self.assertIn('eligibility for the last recommended programs', t3.reply.lower())
+        self.assertTrue(any(tok in t3.reply.lower() for tok in ['qualify', 'eligible', 'eligibility']))

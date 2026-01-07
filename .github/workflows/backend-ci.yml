@@ -22,8 +22,8 @@ jobs:
         env:
           DJANGO_DEBUG: 'True'
         run: |
-          python manage.py check --deploy --fail-level WARNING || true
+          python manage.py check --deploy --fail-level WARNING
           python manage.py migrate --noinput
       - name: Run tests (if present)
         run: |
-          python manage.py test || true
+          python manage.py test

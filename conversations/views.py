@@ -1,16 +1,19 @@
 import json
 from typing import Any, Dict, Optional
-from django.http import JsonResponse, HttpResponseBadRequest
-from django.views.decorators.csrf import csrf_exempt
+
 from django.utils import timezone
 from django.conf import settings
-from django.db.models import Q
-import os
-import base64
-import firebase_admin
-from firebase_admin import auth as fb_auth, credentials
+
+from rest_framework import status
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.response import Response
+
+from utils.drf_auth import FirebaseAuthentication, IsFirebaseAuthenticated
+from utils.errors import error_response
 from .models import Session, Message, Profile
 from .fsm import next_turn
+from .orchestrator import planner_turn
+from .recommendations_service import build_recommendations
 
 try:
     from accounts.models import UserProfile as _UserProfile, OnboardingProfile as _OnboardingProfile  # type: ignore
@@ -41,66 +44,11 @@ def _ensure_session_ttl(sess: Session) -> None:
     sess.save(update_fields=['expires_at'])
 
 
-def _get_token_from_request(request) -> str:
-    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-    if auth_header:
-        parts = auth_header.split(' ', 1)
-        if len(parts) == 2 and parts[0].strip().lower() == 'bearer':
-            return parts[1].strip()
-
-    token = (request.GET.get('id_token') or request.GET.get('token') or '').strip()
-    if token:
-        return token
-
-    if request.method in ('POST', 'PUT', 'PATCH'):
-        try:
-            body = json.loads(request.body.decode('utf-8') or '{}')
-        except Exception:
-            body = {}
-        if isinstance(body, dict):
-            for key in ('id_token', 'token', 'access_token', 'accessToken'):
-                t = (body.get(key) or '').strip()
-                if t:
-                    return t
-
-    return ''
-
-
-def _ensure_firebase_initialized() -> None:
-    if firebase_admin._apps:
-        return
-    try:
-        path = (os.getenv('FIREBASE_CREDENTIALS_JSON_PATH') or os.getenv('GOOGLE_APPLICATION_CREDENTIALS') or '').strip()
-        if path:
-            cred = credentials.Certificate(path)
-            firebase_admin.initialize_app(cred)
-            return
-        b64 = os.getenv('FIREBASE_CREDENTIALS_JSON_B64')
-        if not b64:
-            return
-        data = json.loads(base64.b64decode(b64).decode('utf-8'))
-        cred = credentials.Certificate(data)
-        firebase_admin.initialize_app(cred)
-    except Exception:
-        # Leave uninitialized; auth-protected endpoints will return 401
-        return
-
-
 def _require_uid(request):
-    _ensure_firebase_initialized()
-    if not firebase_admin._apps:
-        return None, JsonResponse({'detail': 'Firebase admin not initialized'}, status=503)
-    token = _get_token_from_request(request)
-    if not token:
-        return None, JsonResponse({'detail': 'Missing bearer token'}, status=401)
-    try:
-        claims = fb_auth.verify_id_token(token)
-        uid = claims.get('uid')
-        if not uid:
-            return None, JsonResponse({'detail': 'Invalid token'}, status=401)
-        return str(uid), None
-    except Exception:
-        return None, JsonResponse({'detail': 'Invalid token'}, status=401)
+    uid = getattr(getattr(request, 'user', None), 'uid', None)
+    if not uid:
+        return None, error_response('Missing bearer token', status_code=status.HTTP_401_UNAUTHORIZED, code='missing_token')
+    return str(uid), None
 
 
 def _serialize_message(m: Message) -> Dict[str, Any]:
@@ -139,13 +87,13 @@ def _serialize_session_list_item(s: Session) -> Dict[str, Any]:
     }
 
 
-@csrf_exempt
+@api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def get_session(request, session_id):
     """GET /api/conversations/sessions/{id}
     Returns session summary and recent messages. Creates a new session on first access.
     """
-    if request.method != 'GET':
-        return HttpResponseBadRequest('GET required')
     uid, err = _require_uid(request)
     if err:
         return err
@@ -159,18 +107,23 @@ def get_session(request, session_id):
             s.ensure_ttl()
             s.save()
         if s.owner_uid and s.owner_uid != uid:
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         if not s.owner_uid:
             s.owner_uid = uid
             s.set_external_user_id(uid)
             s.save(update_fields=['owner_uid', 'external_user_id_encrypted'])
         _ensure_session_ttl(s)
-        return JsonResponse(_serialize_session(s))
+        return Response(_serialize_session(s))
     except Exception as e:
-        return JsonResponse({'detail': str(e)}, status=500)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
 
-@csrf_exempt
+@api_view(['GET', 'POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def sessions_collection(request):
     """GET/POST /api/conversations/sessions
 
@@ -188,7 +141,7 @@ def sessions_collection(request):
         limit = max(1, min(50, limit))
         qs = Session.objects.filter(owner_uid=uid).order_by('-last_activity_at')
         items = [_serialize_session_list_item(s) for s in qs[:limit]]
-        return JsonResponse({'count': qs.count(), 'results': items})
+        return Response({'count': qs.count(), 'results': items})
 
     if request.method == 'POST':
         try:
@@ -197,11 +150,13 @@ def sessions_collection(request):
             s.ensure_ttl()
             s.save()
             _ensure_session_ttl(s)
-            return JsonResponse({'session': _serialize_session(s)}, status=201)
+            return Response({'session': _serialize_session(s)}, status=status.HTTP_201_CREATED)
         except Exception as e:
-            return JsonResponse({'detail': str(e)}, status=500)
-
-    return HttpResponseBadRequest('GET or POST required')
+            detail = 'Server error'
+            if settings.DEBUG:
+                detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+            return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
+    return error_response('Method not allowed', status_code=status.HTTP_405_METHOD_NOT_ALLOWED, code='method_not_allowed')
 
 
 def _grade_points(g: str) -> int:
@@ -461,7 +416,10 @@ def _missing_from_subject_requirements(req: Dict[str, Any], grades: Dict[str, st
             if user_g and (not min_g or _meets_min_grade(user_g, min_g)):
                 satisfied += 1
             else:
-                missing.append(_format_req_label(subj_raw or subj, code_raw or subj, min_g))
+                if min_g:
+                    missing.append(_format_req_label(subj_raw or subj, code_raw or subj, min_g))
+                else:
+                    missing.append(subj)
         if satisfied < pick:
             out.extend(missing[: max(1, pick)])
     return out
@@ -595,14 +553,14 @@ def _score_program(name: str, field_name: str, traits: Dict[str, float], goal_te
     return float(score)
 
 
-@csrf_exempt
+@api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def session_recommendations(request, session_id):
     """GET /api/conversations/sessions/{id}/recommendations
 
     Returns DB-backed structured recommendations for the session's collected Profile.
     """
-    if request.method != 'GET':
-        return HttpResponseBadRequest('GET required')
     uid, err = _require_uid(request)
     if err:
         return err
@@ -610,9 +568,9 @@ def session_recommendations(request, session_id):
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
-            return JsonResponse({'detail': 'Session not found'}, status=404)
+            return error_response('Session not found', status_code=status.HTTP_404_NOT_FOUND, code='not_found')
         if s.owner_uid and s.owner_uid != uid:
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
 
         prof, _ = Profile.objects.get_or_create(session=s)
 
@@ -634,135 +592,21 @@ def session_recommendations(request, session_id):
             goal_text = ''
 
         try:
-            from catalog.models import Program, ProgramCost, YearlyCutoff  # type: ignore
-        except Exception:
-            return JsonResponse({'detail': 'Catalog DB not available'}, status=500)
-
-        try:
             k = int(request.GET.get('k', '10') or '10')
         except Exception:
             k = 10
         k = max(1, min(20, k))
 
-        qs = Program.objects.select_related('institution', 'field').filter(level='bachelor')
+        recs, stretch_items = build_recommendations(
+            grades,
+            traits,
+            goal_text=goal_text,
+            k=k,
+            level='bachelor',
+            raise_on_missing_catalog=True,
+        )
 
-        # Lightweight narrowing based on top traits to keep response fast.
-        traits_sorted = sorted([(t, float(v)) for t, v in (traits or {}).items()], key=lambda kv: -kv[1])
-        if traits_sorted or goal_text:
-            from .recommend import TRAIT_FIELD_HINTS
-            hints: list[str] = []
-            for t, _w in traits_sorted[:3]:
-                hints.extend(TRAIT_FIELD_HINTS.get(t, [])[:4])
-            hints = [h for h in hints if h and len(h) >= 3]
-            if goal_text:
-                gt = (goal_text or '').strip().lower()
-                toks = [t for t in ''.join((ch if ch.isalnum() else ' ') for ch in gt).split() if len(t) >= 4]
-                if toks:
-                    stop = {'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work'}
-                    toks2 = [t for t in toks if t not in stop]
-                    hints.extend(toks2[:10])
-            if hints:
-                q = Q()
-                for h in sorted(set(hints))[:10]:
-                    q |= Q(normalized_name__icontains=h) | Q(name__icontains=h) | Q(field__name__icontains=h)
-                narrowed = qs.filter(q)
-                if narrowed.exists():
-                    qs = narrowed
-
-        # Score candidates (cap scan to avoid heavy CPU on huge catalogs)
-        scored = []
-        for p in qs[:2000]:
-            nm = (p.normalized_name or p.name or '').strip()
-            field_name = (p.field.name if getattr(p, 'field_id', None) else '') or ''
-            sc = _score_program(nm, field_name, traits, goal_text=goal_text)
-            if not traits and grades:
-                sc += 0.2
-            scored.append((sc, p))
-        scored.sort(key=lambda t: (-t[0], (t[1].normalized_name or t[1].name or '')))
-
-        # Build recommendations while applying eligibility-based filtering and competitive cutoff ordering.
-        # - Exclude eligibility=false entirely
-        # - Order: eligible first, then unknown
-        # - Within eligible: higher cutoff is considered more competitive, so show first
-        eligible_recs = []
-        unknown_recs = []
-
-        scan_limit = min(len(scored), max(k * 8, 80))
-        for sc, p in scored[:scan_limit]:
-            nm = (p.normalized_name or p.name or '').strip()
-            field_name = (p.field.name if getattr(p, 'field_id', None) else '') or ''
-
-            cutoff = None
-            cutoff_val = None
-            try:
-                yc = YearlyCutoff.objects.filter(program=p).order_by('-year').first()
-                if yc:
-                    cutoff_val = float(yc.cutoff)
-                    cutoff = {
-                        'year': yc.year,
-                        'cutoff': float(yc.cutoff),
-                        'capacity': yc.capacity,
-                    }
-            except Exception:
-                cutoff = None
-                cutoff_val = None
-
-            elig = _eligibility_from_subject_requirements(p, grades, cutoff=cutoff_val)
-
-            if elig and elig.get('eligible') is False:
-                continue
-
-            cost = None
-            try:
-                pc = ProgramCost.objects.filter(program=p).order_by('-updated_at').first()
-                if not pc and (p.code or '').strip():
-                    pc = ProgramCost.objects.filter(program_code=(p.code or '').strip()).order_by('-updated_at').first()
-                if pc:
-                    cost = {
-                        'amount': float(pc.amount) if pc.amount is not None else None,
-                        'currency': pc.currency or 'KES',
-                        'source_id': pc.source_id or '',
-                        'raw_cost': pc.raw_cost or '',
-                    }
-            except Exception:
-                cost = None
-
-            try:
-                req_preview = p.requirements_preview()
-            except Exception:
-                req_preview = ''
-
-            item = {
-                'program_id': getattr(p, 'id', None),
-                'program_code': (p.code or '').strip(),
-                'program_name': nm,
-                'institution_name': (p.institution.name or '').strip() if getattr(p, 'institution_id', None) else '',
-                'institution_code': (p.institution.code or '').strip() if getattr(p, 'institution_id', None) else '',
-                'field_name': field_name,
-                'level': (p.level or '').strip(),
-                'region': (p.region or '').strip(),
-                'campus': (p.campus or '').strip(),
-                'score': round(float(sc), 3),
-                'eligibility': elig,
-                'requirements_preview': req_preview,
-                'cost': cost,
-                'latest_cutoff': cutoff,
-            }
-
-            if elig and elig.get('eligible') is True:
-                eligible_recs.append((cutoff_val, float(sc), item))
-            else:
-                unknown_recs.append((float(sc), cutoff_val, item))
-
-            if len(eligible_recs) + len(unknown_recs) >= k * 3:
-                break
-
-        eligible_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1]))
-        unknown_recs.sort(key=lambda t: (-t[0], -(t[1] if t[1] is not None else -1.0)))
-        recs = [x[2] for x in eligible_recs] + [x[2] for x in unknown_recs]
-        recs = recs[:k]
-
-        return JsonResponse({
+        return Response({
             'session_id': str(s.id),
             'profile': {
                 'grades': grades,
@@ -770,18 +614,23 @@ def session_recommendations(request, session_id):
             },
             'count': len(recs),
             'recommendations': recs,
+            'stretch_count': len(stretch_items),
+            'stretch_recommendations': stretch_items,
         })
     except Exception as e:
-        return JsonResponse({'detail': str(e)}, status=500)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
 
-@csrf_exempt
+@api_view(['DELETE', 'POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def delete_session(request, session_id):
     """DELETE/POST /api/conversations/sessions/{id}/delete
     Deletes a conversation session and its messages. Returns 204 on success.
     """
-    if request.method not in ('DELETE', 'POST'):
-        return HttpResponseBadRequest('DELETE or POST required')
     uid, err = _require_uid(request)
     if err:
         return err
@@ -789,24 +638,27 @@ def delete_session(request, session_id):
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
-            return JsonResponse({}, status=204)
+            return Response(status=status.HTTP_204_NO_CONTENT)
         if s.owner_uid and s.owner_uid != uid:
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         s.delete()
-        return JsonResponse({}, status=204)
+        return Response(status=status.HTTP_204_NO_CONTENT)
     except Exception as e:
-        return JsonResponse({'detail': str(e)}, status=500)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
 
-@csrf_exempt
+@api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def post_message(request, session_id):
     """POST /api/conversations/sessions/{id}/messages
     Body: { text: str, idempotency_key?: str, user_id?: str }
     Creates the session if it does not exist yet (with TTL), enforces idempotency, and appends the user message.
     Returns a stub assistant reply and current FSM state.
     """
-    if request.method != 'POST':
-        return HttpResponseBadRequest('POST required')
     uid, err = _require_uid(request)
     if err:
         return err
@@ -815,14 +667,16 @@ def post_message(request, session_id):
         text = (data.get('text') or '').strip()
         idem = (data.get('idempotency_key') or '').strip()
         nlp_provider = (data.get('nlp_provider') or '').strip().lower()
+        use_planner = bool(data.get('use_planner')) if 'use_planner' in data else bool(getattr(settings, 'CHAT_PLANNER_ENABLED', False))
+        shadow_mode = bool(getattr(settings, 'CHAT_PLANNER_SHADOW_MODE', False))
         if not text:
-            return JsonResponse({'detail': 'text is required'}, status=400)
+            return error_response('text is required', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields={'text': ['This field is required.']})
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
             s = Session(id=session_id)
         if s.owner_uid and s.owner_uid != uid:
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         if not s.owner_uid:
             s.owner_uid = uid
             s.set_external_user_id(uid)
@@ -835,7 +689,7 @@ def post_message(request, session_id):
             try:
                 prior = Message.objects.get(session=s, idempotency_key=idem)
                 # Return the current session snapshot
-                return JsonResponse({
+                return Response({
                     'session': _serialize_session(s),
                     'duplicate': True,
                 })
@@ -847,7 +701,20 @@ def post_message(request, session_id):
         um.content = text
         um.fsm_state = s.fsm_state
         # Compute next turn using FSM+NLP
-        tr = next_turn(s, text, provider_override=nlp_provider)
+        tr = None
+        planner_tr = None
+        if use_planner:
+            planner_tr = planner_turn(s, text, uid=uid, provider_override=nlp_provider)
+            if not shadow_mode:
+                tr = planner_tr
+
+        if tr is None:
+            tr = next_turn(s, text, provider_override=nlp_provider)
+
+        if planner_tr is not None and shadow_mode:
+            nlp_shadow = planner_tr.nlp_payload or {}
+            nlp_main = tr.nlp_payload or {}
+            tr.nlp_payload = {**nlp_main, 'shadow_planner': nlp_shadow}
         # Persist NLP payload on the user message for observability
         um.nlp = tr.nlp_payload or {}
         um.save()
@@ -868,19 +735,22 @@ def post_message(request, session_id):
         s.last_activity_at = _now()
         s.save(update_fields=['last_activity_at'])
 
-        return JsonResponse({'session': _serialize_session(s)})
+        return Response({'session': _serialize_session(s)})
     except Exception as e:
-        return JsonResponse({'detail': str(e)}, status=500)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
 
 
-@csrf_exempt
+@api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
 def post_profile(request):
     """POST /api/conversations/profile
     Body: { session_id: UUID, traits?: {}, grades?: {}, preferences?: {}, version?: str }
     Upserts the profile for the session.
     """
-    if request.method != 'POST':
-        return HttpResponseBadRequest('POST required')
     uid, err = _require_uid(request)
     if err:
         return err
@@ -888,7 +758,7 @@ def post_profile(request):
         data = json.loads(request.body.decode('utf-8') or '{}')
         session_id = data.get('session_id')
         if not session_id:
-            return JsonResponse({'detail': 'session_id is required'}, status=400)
+            return error_response('session_id is required', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields={'session_id': ['This field is required.']})
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
@@ -899,7 +769,7 @@ def post_profile(request):
             s.save()
 
         if s.owner_uid and s.owner_uid != uid:
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         if not s.owner_uid:
             s.owner_uid = uid
             s.set_external_user_id(uid)
@@ -915,7 +785,7 @@ def post_profile(request):
         if 'version' in data and isinstance(data['version'], str):
             prof.version = data['version']
         prof.save()
-        return JsonResponse({
+        return Response({
             'session_id': str(s.id),
             'profile': {
                 'traits': prof.traits,
@@ -925,4 +795,7 @@ def post_profile(request):
             }
         })
     except Exception as e:
-        return JsonResponse({'detail': str(e)}, status=500)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
