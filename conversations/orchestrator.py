@@ -25,6 +25,20 @@ def planner_turn(session, user_text: str, *, uid: str, provider_override: str = 
     if out is None:
         return None
 
+    if isinstance(out, dict) and str(out.get('type') or '').strip() == 'recommendations':
+        items = out.get('items') or []
+        stretch = out.get('stretch_items') or []
+        if isinstance(items, list) and isinstance(stretch, list) and isinstance(nlp_payload, dict):
+            nlp_payload['turn_recommendations'] = {
+                'count': len(items),
+                'recommendations': items,
+                'stretch_count': len(stretch),
+                'stretch_recommendations': stretch,
+                'goal_text': str(out.get('goal_text') or '').strip(),
+                'k': out.get('k'),
+                'level': str(out.get('level') or '').strip(),
+            }
+
     reply = compose_response(out)
     if not reply:
         return None

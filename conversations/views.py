@@ -735,7 +735,15 @@ def post_message(request, session_id):
         s.last_activity_at = _now()
         s.save(update_fields=['last_activity_at'])
 
-        return Response({'session': _serialize_session(s)})
+        turn_recs = None
+        try:
+            nlp_payload = tr.nlp_payload or {}
+            if isinstance(nlp_payload, dict) and isinstance(nlp_payload.get('turn_recommendations'), dict):
+                turn_recs = nlp_payload.get('turn_recommendations')
+        except Exception:
+            turn_recs = None
+
+        return Response({'session': _serialize_session(s), 'turn_recommendations': turn_recs})
     except Exception as e:
         detail = 'Server error'
         if settings.DEBUG:

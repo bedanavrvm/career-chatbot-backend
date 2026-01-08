@@ -477,6 +477,17 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         goals = _get_career_goals()
         goal_text = _goal_text_for_recommendation()
         recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text)
+
+        if isinstance(analysis, dict):
+            analysis['turn_recommendations'] = {
+                'count': len(recs or []),
+                'recommendations': recs or [],
+                'stretch_count': 0,
+                'stretch_recommendations': [],
+                'goal_text': str(goal_text or '').strip(),
+                'k': 5,
+                'level': 'bachelor',
+            }
         # Persist the last recommendation set for follow-ups like "Why?" and "Which do I qualify for?"
         try:
             slots['last_recommendations'] = [

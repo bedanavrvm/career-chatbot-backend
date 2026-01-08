@@ -186,7 +186,8 @@ def _execute_plan(
 
         res = recommend_programs(ctx=user_ctx, goal_text=goal_text, k=k, level=level)
         recs = res.get('recommendations') or []
-        tool_meta['recommend_programs'] = {'count': len(recs)}
+        stretch = res.get('stretch_recommendations') or []
+        tool_meta['recommend_programs'] = {'count': len(recs), 'stretch_count': len(stretch)}
 
         ctx2 = set_last_results(ctx, [{'program_id': r.get('program_id'), 'score': r.get('score'), 'eligibility': r.get('eligibility')} for r in recs if isinstance(r, dict)])
         ctx3 = update_known_user_facts(
@@ -200,7 +201,14 @@ def _execute_plan(
         ctx.last_intent = ctx3.last_intent
         ctx.known_user_facts = ctx3.known_user_facts
 
-        return {'type': 'recommendations', 'items': recs}, tool_meta
+        return {
+            'type': 'recommendations',
+            'items': recs,
+            'stretch_items': stretch,
+            'goal_text': goal_text,
+            'k': k,
+            'level': level,
+        }, tool_meta
 
     if plan.intent == 'search_programs':
         q = str(plan.entities.get('program_query') or plan.entities.get('goal') or '').strip() or str(user_text or '').strip()
