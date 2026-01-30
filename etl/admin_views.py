@@ -183,24 +183,25 @@ def _admin_etl_process_impl(request):
             return {}
         return {}
 
-    def _pid_running(pid: int, required_substrings: list[str] | None = None) -> bool:
+    def _pid_status(pid: int, required_substrings: list[str] | None = None) -> str:
         try:
             if pid <= 0:
-                return False
+                return 'not_running'
             os.kill(pid, 0)
-            if required_substrings:
-                try:
-                    cmdline_fp = Path(f"/proc/{pid}/cmdline")
-                    if cmdline_fp.exists():
-                        cmdline = cmdline_fp.read_text(encoding='utf-8', errors='ignore').replace('\x00', ' ').lower()
-                        for s in required_substrings:
-                            if str(s).lower() not in cmdline:
-                                return False
-                except Exception:
-                    pass
-            return True
         except Exception:
-            return False
+            return 'not_running'
+
+        if required_substrings:
+            try:
+                cmdline_fp = Path(f"/proc/{pid}/cmdline")
+                if cmdline_fp.exists():
+                    cmdline = cmdline_fp.read_text(encoding='utf-8', errors='ignore').replace('\x00', ' ').lower()
+                    for s in required_substrings:
+                        if str(s).lower() not in cmdline:
+                            return 'mismatch'
+            except Exception:
+                pass
+        return 'running'
 
     def _tail_text(fp: Path, max_lines: int = 200) -> str:
         try:
@@ -215,9 +216,9 @@ def _admin_etl_process_impl(request):
     job_state = _load_job_state()
     job_pid = int(job_state.get("pid") or 0) if job_state else 0
     job_log_path = Path(job_state.get("log_path") or "") if job_state.get("log_path") else None
-    job_running = _pid_running(job_pid, required_substrings=['manage.py', 'kuccps_etl']) if job_pid else False
-    if job_state and job_pid and not job_running:
-        # Avoid blocking new runs due to PID reuse or a crashed job.
+    job_status = _pid_status(job_pid, required_substrings=['manage.py', 'kuccps_etl']) if job_pid else 'not_running'
+    job_running = job_status == 'running'
+    if job_state and job_pid and job_status == 'mismatch':
         try:
             job_state_path.unlink(missing_ok=True)
         except Exception:
@@ -499,7 +500,10 @@ def _admin_etl_process_impl(request):
             dq_report(cfg)
             ran = True
         elif action == "load":
-            load_csvs(cfg, dry_run=dry_run)
+            try:
+                load_summary = load_csvs(cfg, dry_run=dry_run)
+            except Exception:
+                load_summary = None
             ran = True
         elif action == "all":
             copy_inputs(cfg)
@@ -520,7 +524,10 @@ def _admin_etl_process_impl(request):
             transform_normalize(cfg)
             dedup_programs(cfg, inplace=False)
             dq_report(cfg)
-            load_csvs(cfg, dry_run=dry_run)
+            try:
+                load_summary = load_csvs(cfg, dry_run=dry_run)
+            except Exception:
+                load_summary = None
             ran = True
 
         etl_stats_kv = sorted([(k, etl_stats[k]) for k in etl_stats.keys()]) if etl_stats else []

@@ -2185,6 +2185,12 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         logger.info("load: DRY RUN - skipping DB writes")
         return {"totals": {}, "by_source": {}}
     stats = _load()
+    try:
+        logger.info("load: totals=%s", stats.get("totals") if isinstance(stats, dict) else stats)
+        if isinstance(stats, dict) and stats.get("by_source"):
+            logger.info("load: by_source=%s", stats.get("by_source"))
+    except Exception:
+        pass
     logger.info("load: finished writing to database")
     return stats
 

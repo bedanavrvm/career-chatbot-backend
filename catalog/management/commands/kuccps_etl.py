@@ -95,7 +95,11 @@ class Command(BaseCommand):
             dq_report(cfg)
             return
         if action == "load":
-            load_csvs(cfg, dry_run=dry_run)
+            stats = load_csvs(cfg, dry_run=dry_run)
+            try:
+                self.stdout.write(f"load totals: {(stats or {}).get('totals', {})}")
+            except Exception:
+                pass
             return
         if action == "all":
             copy_inputs(cfg)
@@ -118,7 +122,11 @@ class Command(BaseCommand):
             transform_normalize(cfg)
             dedup_programs(cfg, inplace=False)
             dq_report(cfg)
-            load_csvs(cfg, dry_run=dry_run)
+            stats = load_csvs(cfg, dry_run=dry_run)
+            try:
+                self.stdout.write(f"load totals: {(stats or {}).get('totals', {})}")
+            except Exception:
+                pass
             return
 
         raise ValueError(f"Unknown action: {action}")
