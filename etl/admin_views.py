@@ -340,14 +340,45 @@ def _admin_etl_process_impl(request):
             if dry_run:
                 cmd.append("--dry-run")
 
-            with open(log_fp, "a", encoding="utf-8") as logf:
-                p = subprocess.Popen(
-                    cmd,
-                    cwd=str(Path(__file__).resolve().parent.parent),
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
-                    stdout=logf,
-                    stderr=logf,
-                    start_new_session=True,
+            backend_cwd = str(Path(__file__).resolve().parent.parent)
+            proc_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+            try:
+                with open(log_fp, "a", encoding="utf-8") as logf:
+                    logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: starting\n")
+                    logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: action={action} dry_run={bool(dry_run)} inplace={bool(inplace)}\n")
+                    logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: cwd={backend_cwd}\n")
+                    logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: cmd={' '.join(cmd)}\n")
+                    logf.flush()
+                    p = subprocess.Popen(
+                        cmd,
+                        cwd=backend_cwd,
+                        env=proc_env,
+                        stdout=logf,
+                        stderr=logf,
+                        start_new_session=True,
+                    )
+                    logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: spawned pid={p.pid}\n")
+                    logf.flush()
+            except Exception as spawn_err:
+                msg.append(f"Failed to start ETL job: {spawn_err}")
+                return render(
+                    request,
+                    "admin/etl_process.html",
+                    {
+                        "actions": actions,
+                        "action": action,
+                        "ran": False,
+                        "messages": msg,
+                        "config_value": config_path,
+                        "inplace": inplace,
+                        "dry_run": dry_run,
+                        "job_running": False,
+                        "job_pid": 0,
+                        "job_log_path": str(log_fp),
+                        "job_log_tail": _tail_text(log_fp),
+                        "prod_mode": prod_mode,
+                        "local_only_actions": local_only_actions,
+                    },
                 )
 
             job_state = {
