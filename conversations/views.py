@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from utils.drf_auth import FirebaseAuthentication, IsFirebaseAuthenticated
 from utils.errors import error_response
 from .models import Session, Message, Profile
+from .serializers import PostMessageSerializer, PostProfileSerializer
 from .fsm import next_turn
 from .orchestrator import planner_turn
 from .recommendations_service import build_recommendations
@@ -404,7 +405,8 @@ def _missing_from_subject_requirements(req: Dict[str, Any], grades: Dict[str, st
             continue
         opts = grp.get('options', []) or []
         satisfied = 0
-        missing: list[str] = []
+        # Track missing items to provide a hint (not exhaustive)
+        grp_missing: list[str] = []
         for opt in opts:
             subj_raw = (opt.get('subject') or opt.get('subject_code') or '').strip()
             code_raw = (opt.get('code') or '').strip()
@@ -417,11 +419,11 @@ def _missing_from_subject_requirements(req: Dict[str, Any], grades: Dict[str, st
                 satisfied += 1
             else:
                 if min_g:
-                    missing.append(_format_req_label(subj_raw or subj, code_raw or subj, min_g))
+                    grp_missing.append(_format_req_label(subj_raw or subj, code_raw or subj, min_g))
                 else:
-                    missing.append(subj)
+                    grp_missing.append(subj)
         if satisfied < pick:
-            out.extend(missing[: max(1, pick)])
+            out.extend(grp_missing[: max(1, pick)])
     return out
 
 
@@ -663,14 +665,14 @@ def post_message(request, session_id):
     if err:
         return err
     try:
-        data = json.loads(request.body.decode('utf-8') or '{}')
-        text = (data.get('text') or '').strip()
-        idem = (data.get('idempotency_key') or '').strip()
-        nlp_provider = (data.get('nlp_provider') or '').strip().lower()
-        use_planner = bool(data.get('use_planner')) if 'use_planner' in data else bool(getattr(settings, 'CHAT_PLANNER_ENABLED', False))
+        ser = PostMessageSerializer(data=(request.data if hasattr(request, 'data') else {}))
+        if not ser.is_valid():
+            return error_response('Invalid request', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields=ser.errors)
+        text = ser.validated_data.get('text')
+        idem = (ser.validated_data.get('idempotency_key') or '').strip()
+        nlp_provider = (ser.validated_data.get('nlp_provider') or '').strip().lower()
+        use_planner = bool(ser.validated_data.get('use_planner')) if 'use_planner' in ser.validated_data else bool(getattr(settings, 'CHAT_PLANNER_ENABLED', False))
         shadow_mode = bool(getattr(settings, 'CHAT_PLANNER_SHADOW_MODE', False))
-        if not text:
-            return error_response('text is required', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields={'text': ['This field is required.']})
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
@@ -763,10 +765,10 @@ def post_profile(request):
     if err:
         return err
     try:
-        data = json.loads(request.body.decode('utf-8') or '{}')
-        session_id = data.get('session_id')
-        if not session_id:
-            return error_response('session_id is required', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields={'session_id': ['This field is required.']})
+        ser = PostProfileSerializer(data=(request.data if hasattr(request, 'data') else {}))
+        if not ser.is_valid():
+            return error_response('Invalid request', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error', fields=ser.errors)
+        session_id = ser.validated_data.get('session_id')
         try:
             s = Session.objects.get(id=session_id)
         except Session.DoesNotExist:
@@ -784,14 +786,12 @@ def post_profile(request):
             s.save(update_fields=['owner_uid', 'external_user_id_encrypted'])
 
         prof, _ = Profile.objects.get_or_create(session=s)
-        if 'traits' in data and isinstance(data['traits'], dict):
-            prof.traits = data['traits']
-        if 'grades' in data and isinstance(data['grades'], dict):
-            prof.grades = data['grades']
-        if 'preferences' in data and isinstance(data['preferences'], dict):
-            prof.preferences = data['preferences']
-        if 'version' in data and isinstance(data['version'], str):
-            prof.version = data['version']
+        prof.traits = ser.validated_data.get('traits') or {}
+        prof.grades = ser.validated_data.get('grades') or {}
+        prof.preferences = ser.validated_data.get('preferences') or {}
+        v = ser.validated_data.get('version')
+        if isinstance(v, str) and v:
+            prof.version = v
         prof.save()
         return Response({
             'session_id': str(s.id),

@@ -81,10 +81,14 @@ class Session(models.Model):
         return _decrypt_text(self.external_user_id_encrypted)
 
     def ensure_ttl(self) -> None:
-        """Ensure expires_at is set based on settings.CONV_SESSION_TTL_MINUTES if missing."""
-        if not self.expires_at:
-            ttl_min = int(getattr(settings, 'CONV_SESSION_TTL_MINUTES', 60) or 60)
-            self.expires_at = timezone.now() + timedelta(minutes=ttl_min)
+        """Ensure expires_at is set and extended based on settings.CONV_SESSION_TTL_MINUTES.
+
+        This implements a sliding TTL: each call can extend expiry forward, but never shortens it.
+        """
+        ttl_min = int(getattr(settings, 'CONV_SESSION_TTL_MINUTES', 60) or 60)
+        desired = timezone.now() + timedelta(minutes=ttl_min)
+        if (not self.expires_at) or (self.expires_at < desired):
+            self.expires_at = desired
 
 
 class Message(models.Model):

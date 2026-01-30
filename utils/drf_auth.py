@@ -22,6 +22,14 @@ class FirebaseUser:
     claims: dict
 
     @property
+    def pk(self) -> str:
+        return self.uid
+
+    @property
+    def id(self) -> str:
+        return self.uid
+
+    @property
     def is_authenticated(self) -> bool:
         return True
 

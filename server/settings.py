@@ -30,14 +30,28 @@ except Exception:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-hsk@9zfoe#0s*swj-3g#076^$%x54a#&!zkc*&35$vh38i7md_')
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
+_django_env = (os.getenv('DJANGO_ENV') or os.getenv('ENVIRONMENT') or '').strip().lower()
+if _django_env in ('prod', 'production') and DEBUG:
+    raise ImproperlyConfigured('DJANGO_DEBUG must be false when DJANGO_ENV is production')
+
+_secret_key_env = (os.getenv('DJANGO_SECRET_KEY') or '').strip()
+if _secret_key_env:
+    SECRET_KEY = _secret_key_env
+else:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-hsk@9zfoe#0s*swj-3g#076^$%x54a#&!zkc*&35$vh38i7md_'
+    else:
+        raise ImproperlyConfigured('DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is false')
 
 _allowed_hosts_env = os.getenv('ALLOWED_HOSTS', '')
-ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()] if _allowed_hosts_env else (['*'] if DEBUG else [])
+if _allowed_hosts_env:
+    ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1'] if DEBUG else []
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured('ALLOWED_HOSTS must be set when DJANGO_DEBUG is false')
 
 
 # Application definition
@@ -58,6 +72,14 @@ INSTALLED_APPS = [
 
 REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'utils.drf_exceptions.drf_exception_handler',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('DRF_THROTTLE_ANON', '60/min'),
+        'user': os.getenv('DRF_THROTTLE_USER', '600/min'),
+    },
 }
 
 _rag_use_pgvector = os.getenv('RAG_USE_PGVECTOR', '0').strip().lower() in ('1', 'true', 'yes')

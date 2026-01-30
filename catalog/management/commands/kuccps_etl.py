@@ -29,24 +29,41 @@ class Command(BaseCommand):
                 break
         etl_dir = backend_dir / "scripts" / "etl" / "kuccps"
 
-        import sys
-
         if not (etl_dir / "etl.py").exists():
             raise RuntimeError(f"KUCCPS ETL module not found at {etl_dir} (expected etl.py). backend_dir={backend_dir}")
 
-        if str(etl_dir) not in sys.path:
-            sys.path.append(str(etl_dir))
-        from etl import (  # type: ignore
-            Config,
-            copy_inputs,
-            bootstrap_csvs,
-            extract_programs,
-            transform_programs,
-            transform_normalize,
-            dedup_programs,
-            dq_report,
-            load_csvs,
-        )
+        # IMPORTANT: don't import `etl` directly, because this repo also has a Django app package named `etl`.
+        # Import the KUCCPS ETL module explicitly.
+        try:
+            from scripts.etl.kuccps.etl import (  # type: ignore
+                Config,
+                copy_inputs,
+                bootstrap_csvs,
+                extract_programs,
+                transform_programs,
+                transform_normalize,
+                dedup_programs,
+                dq_report,
+                load_csvs,
+            )
+        except Exception:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("kuccps_etl_module", str((etl_dir / "etl.py").resolve()))
+            if not spec or not spec.loader:
+                raise
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+
+            Config = getattr(m, "Config")
+            copy_inputs = getattr(m, "copy_inputs")
+            bootstrap_csvs = getattr(m, "bootstrap_csvs")
+            extract_programs = getattr(m, "extract_programs")
+            transform_programs = getattr(m, "transform_programs")
+            transform_normalize = getattr(m, "transform_normalize")
+            dedup_programs = getattr(m, "dedup_programs")
+            dq_report = getattr(m, "dq_report")
+            load_csvs = getattr(m, "load_csvs")
 
         if config_path:
             p = Path(config_path)
