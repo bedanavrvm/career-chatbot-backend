@@ -260,6 +260,13 @@ def gemini_turn_stream(
             yield text
 
 
+def analyze_text(
+    text: str,
+    *,
+    api_key: str,
+    model_name: str = 'gemini-1.5-flash',
+    history_text: str = '',
+) -> Dict[str, Any]:
     """Call Gemini to analyze free text and return a structured payload compatible with nlp.analyze.
 
     Args:

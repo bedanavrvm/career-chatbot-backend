@@ -842,6 +842,7 @@ def build_recommendations(
                 'cost': r.get('cost'),
                 'score': r.get('score'),
                 'stretch_reason': r.get('stretch_reason'),
+                'eligibility': r.get('eligibility'),
             })
         return [grouped[nm] for nm in order]
 
