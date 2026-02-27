@@ -301,7 +301,7 @@ def api_catalog_status(_request):
 @api_view(['GET'])
 @authentication_classes([])
 @permission_classes([])
-def api_catalog_program_detail(request, program_id: int):
+def api_catalog_program_detail(request, program_id_or_code: str):
     try:
         try:
             from catalog.models import Program, YearlyCutoff, ProgramCost, ProgramRequirementGroup  # type: ignore
@@ -314,15 +314,12 @@ def api_catalog_program_detail(request, program_id: int):
         if Program is None:
             return error_response("Catalog DB not available", status_code=503, code='catalog_unavailable')
 
+        from django.db.models import Q
         try:
-            pid = int(program_id)
+            pid = int(program_id_or_code)
+            pk_lookup = Q(id=pid) | Q(code=str(program_id_or_code))
         except Exception:
-            return error_response(
-                "Invalid program id",
-                status_code=400,
-                code='validation_error',
-                fields={'program_id': ['Invalid integer.']},
-            )
+            pk_lookup = Q(code=str(program_id_or_code))
 
         qs = Program.objects.select_related("institution", "field").prefetch_related(
             "cutoffs",
@@ -331,9 +328,8 @@ def api_catalog_program_detail(request, program_id: int):
             "requirement_groups__options",
             "requirement_groups__options__subject",
         )
-        try:
-            p = qs.get(id=pid)
-        except Program.DoesNotExist:
+        p = qs.filter(pk_lookup).first()
+        if not p:
             return error_response("Program not found", status_code=404, code='not_found')
 
         inst = getattr(p, "institution", None)

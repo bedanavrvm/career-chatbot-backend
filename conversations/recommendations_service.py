@@ -720,7 +720,7 @@ def build_recommendations(
             sc += 0.2
         scored.append((float(sc), p))
 
-    scored.sort(key=lambda t: (-t[0], (getattr(t[1], 'normalized_name', '') or getattr(t[1], 'name', '') or '')))
+    scored.sort(key=lambda t: (-t[0], (getattr(t[1], 'normalized_name', '') or getattr(t[1], 'name', '') or ''), getattr(t[1], 'id', 0)))
 
     eligible_recs: List[Tuple[Optional[float], float, Dict[str, Any]]] = []
     unknown_recs: List[Tuple[float, Optional[float], Dict[str, Any]]] = []
@@ -816,9 +816,9 @@ def build_recommendations(
         if len(eligible_recs) + len(unknown_recs) >= max_collect:
             break
 
-    eligible_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1]))
-    unknown_recs.sort(key=lambda t: (-t[0], -(t[1] if t[1] is not None else -1.0)))
-    stretch_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1]))
+    eligible_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1], t[2].get('program_id') or 0))
+    unknown_recs.sort(key=lambda t: (-t[0], -(t[1] if t[1] is not None else -1.0), t[2].get('program_id') or 0))
+    stretch_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1], t[2].get('program_id') or 0))
 
     recs_all = [x[2] for x in eligible_recs] + [x[2] for x in unknown_recs]
     recs = recs_all[:k]
