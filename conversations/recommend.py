@@ -35,6 +35,7 @@ TRAIT_FIELD_HINTS: Dict[str, List[str]] = {
 }
 
 CAREER_PATH_KEYWORDS: Dict[str, List[str]] = {
+    # STEM / Technology
     'astronomer': ['astronomy', 'astrophys', 'physics', 'space'],
     'astrophysicist': ['astrophys', 'astronomy', 'physics', 'space'],
     'space scientist': ['space science', 'astronomy', 'astrophys', 'physics'],
@@ -43,12 +44,34 @@ CAREER_PATH_KEYWORDS: Dict[str, List[str]] = {
     'data scientist': ['data science', 'statistics', 'computer science', 'informatics'],
     'software engineer': ['software', 'computer science', 'informatics'],
     'physicist': ['physics', 'applied physics', 'space'],
+    # Music / Arts
     'musician': ['music', 'musician', 'performance', 'instrument', 'singing'],
     'composer': ['music', 'composition', 'composer', 'orchestration'],
     'songwriter': ['music', 'songwriting', 'songwriter', 'lyrics'],
     'music producer': ['music', 'production', 'producer', 'recording', 'studio'],
     'sound engineer': ['audio', 'sound', 'recording', 'studio', 'music'],
     'music teacher': ['music', 'education', 'teaching', 'teacher'],
+    # Medicine / Healthcare
+    'medical doctor': ['medicine', 'mbchb', 'clinical', 'medical', 'hospital', 'surgery'],
+    'surgeon': ['surgery', 'surgical', 'medicine', 'mbchb', 'clinical'],
+    'clinical officer': ['clinical', 'medicine', 'health', 'hospital'],
+    'pharmacist': ['pharmacy', 'pharmaceutical', 'drug', 'pharm'],
+    'registered nurse': ['nursing', 'nurse', 'health', 'midwifery'],
+    'physiotherapist': ['physiotherapy', 'rehabilitation', 'therapy', 'health'],
+    'dentist': ['dental', 'dentistry', 'oral', 'bds', 'surgery'],
+    'nutritionist': ['nutrition', 'dietetics', 'food', 'health'],
+    'veterinarian': ['veterinary', 'animal', 'vet'],
+    'public health officer': ['public health', 'community health', 'epidemiology'],
+    # Law / Business
+    'lawyer': ['law', 'legal', 'advocate', 'llb'],
+    'accountant': ['accounting', 'finance', 'cpa', 'commerce'],
+    'economist': ['economics', 'finance', 'statistics'],
+    # Education
+    'teacher': ['education', 'teaching', 'pedagogy'],
+    # Engineering
+    'civil engineer': ['civil engineering', 'construction', 'structural'],
+    'mechanical engineer': ['mechanical', 'manufacturing', 'mechatronics'],
+    'electrical engineer': ['electrical', 'electronics', 'power'],
 }
 
 def infer_career_paths(traits: Dict[str, float], limit: int = 8) -> List[str]:

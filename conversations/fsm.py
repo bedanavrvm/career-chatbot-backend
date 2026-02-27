@@ -24,6 +24,13 @@ except Exception:
     _gem_compose = None  # type: ignore
 
 try:
+    from .providers.gemini_provider import gemini_turn as _gem_turn  # type: ignore
+    from .providers.gemini_provider import gemini_turn_stream as _gem_turn_stream  # type: ignore
+except Exception:
+    _gem_turn = None  # type: ignore
+    _gem_turn_stream = None  # type: ignore
+
+try:
     from .providers.gemini_provider import compose_rag_answer as _gem_rag_compose  # type: ignore
 except Exception:
     _gem_rag_compose = None  # type: ignore
@@ -270,32 +277,209 @@ def _build_history_text(session: Session, max_turns: int = 8) -> str:
         return ''
 
 
+def _resolve_provider(provider_override: str) -> str:
+    """Determine the active NLP/conversation provider."""
+    override = (provider_override or '').strip().lower()
+    if override in ('local', 'gemini'):
+        return override
+    from django.conf import settings
+    prov_env = (getattr(settings, 'NLP_PROVIDER', '') or '').strip().lower()
+    api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+    return prov_env or ('gemini' if api_key else 'local')
+
+
+def _update_profile_from_analysis(session: Session, analysis: Dict[str, Any], prof: 'Profile') -> None:
+    """Apply grades/traits extracted by local NLP into the session Profile.
+
+    Called as a side-effect when Gemini is running the full conversation so
+    that database state stays up to date regardless of provider.
+    """
+    grades = analysis.get('grades') or {}
+    traits = analysis.get('traits') or {}
+    changed = False
+    if grades:
+        prof.grades = _merge_grades(prof.grades or {}, grades)
+        changed = True
+    if traits:
+        tcur = prof.traits or {}
+        for k, v in traits.items():
+            try:
+                tcur[k] = max(float(tcur.get(k, 0.0)), float(v))
+            except Exception:
+                pass
+        prof.traits = tcur
+        changed = True
+    if changed:
+        try:
+            prof.save(update_fields=['grades', 'traits', 'updated_at'])
+        except Exception:
+            prof.save()
+
+
+def _gemini_first_turn(session: Session, user_text: str, history_text: str, local_analysis: Dict[str, Any]) -> 'TurnResult':
+    """Full conversation turn handled by Gemini, bypassing the FSM dispatcher.
+
+    Loads profile context, fetches catalog recommendations, then calls
+    gemini_turn() with the full picture so Gemini can reply naturally
+    to any input (greeting, question, pivot, follow-up, .. anything).
+    Falls back to the local FSM if Gemini is unavailable or errors.
+    """
+    from django.conf import settings
+
+    prof = _ensure_profile(session)
+    _seed_profile_from_onboarding(session, prof)
+
+    # ── Gather profile context ────────────────────────────────────────────────
+    prefs = prof.preferences or {}
+    career_goals_raw = prefs.get('career_goals') if isinstance(prefs, dict) else None
+    if isinstance(career_goals_raw, list):
+        career_goals = [str(x).strip() for x in career_goals_raw if str(x).strip()]
+    elif isinstance(career_goals_raw, str) and career_goals_raw.strip():
+        career_goals = [career_goals_raw.strip()]
+    else:
+        career_goals = []
+    # Also pull goal from the current user_text if it looks like a goal statement
+    low = (user_text or '').strip().lower()
+    if any(kw in low for kw in ['want to', 'want to be', 'become', 'study', 'do medicine', 'be a', 'i want']):
+        career_goals = [user_text.strip()] + [g for g in career_goals if g.lower() != low]
+
+    profile_context = {
+        'grades': prof.grades or {},
+        'traits': prof.traits or {},
+        'career_goals': career_goals,
+        'region': (prefs.get('region') or '') if isinstance(prefs, dict) else '',
+        'education_level': (prefs.get('education_level') or 'high_school') if isinstance(prefs, dict) else 'high_school',
+    }
+
+    # ── Goal text for catalog search ──────────────────────────────────────────
+    goal_text = ' '.join(career_goals).strip() or user_text.strip()
+    level = (prefs.get('education_level') or 'bachelor') if isinstance(prefs, dict) else 'bachelor'
+    if level not in ('bachelor', 'diploma', 'masters', 'certificate'):
+        level = 'bachelor'
+
+    # ── Fetch catalog recommendations ─────────────────────────────────────────
+    recommendations: List[Dict[str, Any]] = []
+    try:
+        recommendations = recommend_top_k(
+            prof.grades or {},
+            prof.traits or {},
+            k=10,
+            goal_text=goal_text,
+            level=level,
+        ) or []
+    except Exception as _re:
+        logger.debug('_gemini_first_turn: recommend_top_k failed: %s', _re)
+
+    # ── Call Gemini ───────────────────────────────────────────────────────────
+    api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+    model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
+
+    if not api_key or _gem_turn is None:
+        raise RuntimeError('Gemini API key or gemini_turn not available — falling back to FSM')
+
+    reply = _gem_turn(
+        user_text,
+        history_text,
+        profile_context,
+        recommendations,
+        api_key=api_key,
+        model_name=model_name,
+    )
+
+    # ── Persist updated profile state (analysis already done in next_turn) ────
+    slots = dict(session.slots or {})
+    if prof.grades:
+        slots['grades'] = prof.grades
+    if prof.traits:
+        slots['traits'] = prof.traits
+    # Store last recommendations so follow-up eligibility checks can reference them
+    if recommendations:
+        slots['last_recommendations'] = [
+            {
+                'program_id': r.get('program_id'),
+                'program_code': r.get('program_code'),
+                'program_name': r.get('program_name'),
+                'institution_name': r.get('institution_name'),
+                'field_name': r.get('field_name'),
+                'level': r.get('level'),
+                'score': r.get('score'),
+            }
+            for r in recommendations
+        ]
+
+    return TurnResult(
+        reply=reply,
+        next_state='recommend',
+        confidence=1.0,
+        slots=slots,
+        nlp_payload={
+            'provider': 'gemini',
+            'grades': local_analysis.get('grades') or {},
+            'traits': local_analysis.get('traits') or {},
+            'intents': local_analysis.get('intents') or [],
+            'turn_recommendations': {
+                'count': len(recommendations),
+                'recommendations': recommendations,
+                'stretch_count': 0,
+                'stretch_recommendations': [],
+                'goal_text': goal_text,
+                'k': 10,
+                'level': level,
+            },
+        },
+    )
+
+
 def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
-    """Compute the next assistant reply/state from user_text using lightweight NLP.
-    - Updates session slots and profile (grades/traits) deterministically.
-    - Applies a confidence threshold to trigger clarifying prompts.
-    - Passes recent conversation history to the LLM for multi-turn awareness.
-    States: greeting -> collect_interests -> summarize
+    """Compute the next assistant reply/state from user_text.
+
+    When Gemini is the active provider, bypasses the FSM dispatcher entirely
+    and hands control to _gemini_first_turn() so that Gemini can handle any
+    natural-language input conversationally.
+
+    When local NLP is the active provider, the original FSM behaviour runs as
+    before (deterministic state machine + template-based replies).
+
+    In both cases, local NLP always runs first as a side-effect to extract
+    grades/traits and keep the Profile DB up to date.
     """
     history_text = _build_history_text(session)
+    provider = _resolve_provider(provider_override)
+
+    # ── Always run local NLP (fast, no API call) for grade/trait extraction ──
+    # This keeps the Profile DB up to date regardless of which provider is
+    # generating the response.
+    local_analysis = nlp.analyze(user_text, provider_override='local')
+    prof = _ensure_profile(session)
+    _seed_profile_from_onboarding(session, prof)
+    _update_profile_from_analysis(session, local_analysis, prof)
+
+    # ── Gemini-first path: Gemini owns the full reply ─────────────────────────
+    if provider == 'gemini' and _gem_turn is not None:
+        try:
+            return _gemini_first_turn(session, user_text, history_text, local_analysis)
+        except Exception as _gem_err:
+            logger.warning('next_turn: Gemini failed (%s), falling back to local FSM', _gem_err)
+            # Fall through to the local FSM path below
+
+    # ── Local FSM path (unchanged behaviour) ──────────────────────────────────
+    # Re-run analysis with the Gemini provider (or local) to get intents.
     analysis = nlp.analyze(user_text, provider_override=provider_override, history_text=history_text)
     conf = float(analysis.get('confidence') or 0.0)
     grades = analysis.get('grades') or {}
     traits = analysis.get('traits') or {}
     intents = analysis.get('intents') or []
 
-    prof = _ensure_profile(session)
-    _seed_profile_from_onboarding(session, prof)
-    # Merge grades/traits into profile
+    # Merge any additionally extracted grades/traits (Gemini may find more)
     if grades:
         prof.grades = _merge_grades(prof.grades or {}, grades)
     if traits:
-        # Take max per trait as a simple aggregator
         tcur = prof.traits or {}
         for k, v in traits.items():
             tcur[k] = max(float(tcur.get(k, 0.0)), float(v))
         prof.traits = tcur
     prof.save()
+
 
     # Copy into session slots snapshot
     slots = dict(session.slots or {})
@@ -518,7 +702,9 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         itxt = ", ".join(list(tuse.keys())) or "(none)"
         goals = _get_career_goals()
         level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
-        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text, level=level)
+        # FIX: was using `goal_text` (undefined variable), now calls _goal_text_for_recommendation()
+        resolved_goal_text = _goal_text_for_recommendation()
+        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=resolved_goal_text, level=level)
 
         if isinstance(analysis, dict):
             analysis['turn_recommendations'] = {
@@ -526,7 +712,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 'recommendations': recs or [],
                 'stretch_count': 0,
                 'stretch_recommendations': [],
-                'goal_text': str(goal_text or '').strip(),
+                'goal_text': str(resolved_goal_text or '').strip(),
                 'k': 5,
                 'level': level,
             }
@@ -640,14 +826,49 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
 
     def career_paths() -> TurnResult:
         low = (user_text or '').lower()
-        if any(k in low for k in ['music', 'musician', 'singer', 'singing', 'composer', 'songwriter']):
-            paths = ['musician', 'composer', 'songwriter', 'music producer', 'sound engineer', 'music teacher']
-        else:
+
+        # Step 1: if user explicitly names a field/goal, use that to drive paths.
+        # This prevents traits-based inference overriding explicit user intent.
+        explicit_goal = _goal_text_for_recommendation().strip().lower()
+
+        # Known domain → representative career list mapping.
+        _DOMAIN_PATHS: Dict[str, List[str]] = {
+            'medicine': ['medical doctor', 'surgeon', 'clinical officer', 'physician', 'anaesthesiologist'],
+            'medical': ['medical doctor', 'surgeon', 'clinical officer', 'physician'],
+            'doctor': ['medical doctor', 'surgeon', 'clinical officer', 'general practitioner'],
+            'nursing': ['registered nurse', 'public health nurse', 'midwife', 'nurse practitioner'],
+            'pharmacy': ['pharmacist', 'pharmaceutical scientist', 'clinical pharmacist'],
+            'dentist': ['dental surgeon', 'orthodontist', 'oral health officer'],
+            'dental': ['dental surgeon', 'oral health officer', 'orthodontist'],
+            'engineering': ['civil engineer', 'mechanical engineer', 'electrical engineer', 'software engineer'],
+            'law': ['lawyer', 'advocate', 'legal counsel', 'magistrate', 'judge'],
+            'accounting': ['accountant', 'auditor', 'financial analyst', 'tax consultant'],
+            'finance': ['financial analyst', 'investment banker', 'actuary', 'economist'],
+            'education': ['teacher', 'school principal', 'curriculum developer', 'education officer'],
+            'music': ['musician', 'composer', 'songwriter', 'music producer', 'sound engineer', 'music teacher'],
+            'design': ['graphic designer', 'UX designer', 'interior designer', 'fashion designer'],
+            'architecture': ['architect', 'urban planner', 'quantity surveyor'],
+            'computer': ['software engineer', 'data scientist', 'cybersecurity analyst', 'systems analyst'],
+            'science': ['research scientist', 'laboratory scientist', 'physicist', 'chemist'],
+            'agriculture': ['agricultural officer', 'agronomist', 'food scientist', 'veterinarian'],
+        }
+
+        paths: List[str] = []
+        # Check explicit goal text and user message for known domains.
+        search_text = f"{explicit_goal} {low}"
+        for domain, domain_paths in _DOMAIN_PATHS.items():
+            if domain in search_text:
+                paths = domain_paths
+                break
+
+        if not paths:
+            # Fall back to RIASEC trait-based inference.
             tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
             paths = infer_career_paths(tuse or {}, limit=8)
+
         if not paths:
             return TurnResult(
-                reply="Tell me what you enjoy (e.g., music, design, science) and I will suggest possible career paths.",
+                reply="Tell me what you enjoy or want to pursue (e.g., medicine, design, science) and I will suggest possible career paths.",
                 next_state=state,
                 confidence=conf,
                 slots=slots,
