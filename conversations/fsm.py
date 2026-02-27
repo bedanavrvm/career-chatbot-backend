@@ -457,29 +457,19 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         level = 'bachelor'
 
     recommendations: List[Dict[str, Any]] = []
+    stretch_recommendations: List[Dict[str, Any]] = []
     if has_rec_intent and goal_text:
         try:
-            recommendations = recommend_top_k(
+            from .recommendations_service import build_recommendations
+            recommendations, stretch_recommendations = build_recommendations(
                 prof.grades or {},
                 prof.traits or {},
-                k=10,
                 goal_text=goal_text,
+                k=10,
                 level=level,
-            ) or []
-            
-            try:
-                from catalog.models import Program
-                for r in recommendations:
-                    pid = r.get('program_id')
-                    if pid:
-                        prog = Program.objects.filter(id=pid).first()
-                        if prog:
-                            r['eligibility'] = compute_eligibility(prog, prof.grades or {})
-            except Exception as _e:
-                logger.debug('eligibility check failed: %s', _e)
-
+            )
         except Exception as _re:
-            logger.debug('_gemini_first_turn: recommend_top_k failed: %s', _re)
+            logger.debug('_gemini_first_turn: build_recommendations failed: %s', _re)
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
     api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
@@ -531,8 +521,8 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         nlp_payload['turn_recommendations'] = {
             'count': len(recommendations),
             'recommendations': recommendations,
-            'stretch_count': 0,
-            'stretch_recommendations': [],
+            'stretch_count': len(stretch_recommendations),
+            'stretch_recommendations': stretch_recommendations,
             'goal_text': goal_text,
             'k': 10,
             'level': level,
