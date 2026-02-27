@@ -319,9 +319,9 @@ def _update_profile_from_analysis(session: Session, analysis: Dict[str, Any], pr
 def _gemini_first_turn(session: Session, user_text: str, history_text: str, local_analysis: Dict[str, Any]) -> 'TurnResult':
     """Full conversation turn handled by Gemini, bypassing the FSM dispatcher.
 
-    Loads profile context, fetches catalog recommendations, then calls
-    gemini_turn() with the full picture so Gemini can reply naturally
-    to any input (greeting, question, pivot, follow-up, .. anything).
+    Loads profile context, fetches catalog recommendations ONLY when the user
+    is asking for them, then calls gemini_turn() with the full picture so
+    Gemini can reply naturally to any input.
     Falls back to the local FSM if Gemini is unavailable or errors.
     """
     from django.conf import settings
@@ -338,9 +338,17 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         career_goals = [career_goals_raw.strip()]
     else:
         career_goals = []
-    # Also pull goal from the current user_text if it looks like a goal statement
+
     low = (user_text or '').strip().lower()
-    if any(kw in low for kw in ['want to', 'want to be', 'become', 'study', 'do medicine', 'be a', 'i want']):
+
+    # Only add user_text as a career goal when it's a strong, explicit goal
+    # statement — NOT for greetings or casual messages.
+    _STRONG_GOAL_MARKERS = [
+        'i want to be', 'i want to become', 'i want to study', 'i want to do',
+        'i want to pursue', 'i would like to be', 'i would like to study',
+        'my goal is', 'my dream is', 'i am interested in becoming',
+    ]
+    if any(kw in low for kw in _STRONG_GOAL_MARKERS):
         career_goals = [user_text.strip()] + [g for g in career_goals if g.lower() != low]
 
     profile_context = {
@@ -351,24 +359,45 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         'education_level': (prefs.get('education_level') or 'high_school') if isinstance(prefs, dict) else 'high_school',
     }
 
-    # ── Goal text for catalog search ──────────────────────────────────────────
-    goal_text = ' '.join(career_goals).strip() or user_text.strip()
+    # ── Detect whether the user is asking for recommendations ────────────────
+    # Only fetch catalog data when the user clearly wants program suggestions.
+    # For greetings, clarifying questions, or follow-ups don't fetch anything —
+    # this also prevents Gemini from proactively listing programs unprompted.
+    _REC_INTENT_WORDS = {
+        'recommend', 'suggest', 'show', 'list', 'find', 'what courses', 'what programs',
+        'what should i study', 'what can i study', 'which programs', 'which courses',
+        'study', 'apply', 'options', 'paths', 'career path', 'career paths',
+        'programs near', 'courses near', 'eligible', 'qualify', 'fit me',
+        'i want to be', 'i want to study', 'i want to do', 'i want to become',
+        'medicine', 'engineering', 'nursing', 'law', 'pharmacy', 'doctor',
+        'dentist', 'architect', 'pilot', 'accountant', 'teacher',
+    }
+    has_rec_intent = any(kw in low for kw in _REC_INTENT_WORDS)
+
+    # Also check intents detected by local NLP
+    local_intents = local_analysis.get('intents') or []
+    _REC_INTENTS = {'recommend', 'career_paths', 'qualify', 'catalog_lookup', 'programs_near_me'}
+    if any(i in _REC_INTENTS for i in local_intents):
+        has_rec_intent = True
+
+    # ── Fetch catalog recommendations (only when needed) ─────────────────────
+    goal_text = ' '.join(career_goals).strip() or (user_text.strip() if has_rec_intent else '')
     level = (prefs.get('education_level') or 'bachelor') if isinstance(prefs, dict) else 'bachelor'
     if level not in ('bachelor', 'diploma', 'masters', 'certificate'):
         level = 'bachelor'
 
-    # ── Fetch catalog recommendations ─────────────────────────────────────────
     recommendations: List[Dict[str, Any]] = []
-    try:
-        recommendations = recommend_top_k(
-            prof.grades or {},
-            prof.traits or {},
-            k=10,
-            goal_text=goal_text,
-            level=level,
-        ) or []
-    except Exception as _re:
-        logger.debug('_gemini_first_turn: recommend_top_k failed: %s', _re)
+    if has_rec_intent and goal_text:
+        try:
+            recommendations = recommend_top_k(
+                prof.grades or {},
+                prof.traits or {},
+                k=10,
+                goal_text=goal_text,
+                level=level,
+            ) or []
+        except Exception as _re:
+            logger.debug('_gemini_first_turn: recommend_top_k failed: %s', _re)
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
     api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
@@ -386,7 +415,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         model_name=model_name,
     )
 
-    # ── Persist updated profile state (analysis already done in next_turn) ────
+    # ── Persist updated profile state ─────────────────────────────────────────
     slots = dict(session.slots or {})
     if prof.grades:
         slots['grades'] = prof.grades
@@ -407,27 +436,34 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
             for r in recommendations
         ]
 
+    # Only include turn_recommendations in the payload when the user explicitly
+    # asked for them. This prevents the sidebar panel from flickering/changing
+    # on every message (e.g. greetings, follow-up questions).
+    nlp_payload: Dict[str, Any] = {
+        'provider': 'gemini',
+        'grades': local_analysis.get('grades') or {},
+        'traits': local_analysis.get('traits') or {},
+        'intents': local_analysis.get('intents') or [],
+    }
+    if has_rec_intent and recommendations:
+        nlp_payload['turn_recommendations'] = {
+            'count': len(recommendations),
+            'recommendations': recommendations,
+            'stretch_count': 0,
+            'stretch_recommendations': [],
+            'goal_text': goal_text,
+            'k': 10,
+            'level': level,
+        }
+
     return TurnResult(
         reply=reply,
         next_state='recommend',
         confidence=1.0,
         slots=slots,
-        nlp_payload={
-            'provider': 'gemini',
-            'grades': local_analysis.get('grades') or {},
-            'traits': local_analysis.get('traits') or {},
-            'intents': local_analysis.get('intents') or [],
-            'turn_recommendations': {
-                'count': len(recommendations),
-                'recommendations': recommendations,
-                'stretch_count': 0,
-                'stretch_recommendations': [],
-                'goal_text': goal_text,
-                'k': 10,
-                'level': level,
-            },
-        },
+        nlp_payload=nlp_payload,
     )
+
 
 
 def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
