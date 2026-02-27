@@ -103,14 +103,24 @@ def gemini_turn(
         ctx_parts.append(f"(Top {len(recommendations)} programs matched from the KUCCPS catalog)")
         for i, r in enumerate(recommendations[:10], 1):
             nm = (r.get('program_name') or '').strip()
-            inst = (r.get('institution_name') or '').strip()
-            code = (r.get('program_code') or '').strip()
             score = r.get('score')
             line = f"{i}. {nm}"
-            if inst:
-                line += f" — {inst}"
-            if code:
-                line += f" [{code}]"
+            
+            institutions = r.get('institutions', [])
+            if institutions:
+                inst_list = []
+                for inst_dict in institutions[:3]:
+                    iname = (inst_dict.get('institution_name') or '').strip()
+                    code = (inst_dict.get('program_code') or '').strip()
+                    if iname and code:
+                        inst_list.append(f"{iname} [{code}]")
+                    elif iname:
+                        inst_list.append(iname)
+                if inst_list:
+                    line += f" — Offered at: {', '.join(inst_list)}"
+                    if len(institutions) > 3:
+                        line += f" (and {len(institutions) - 3} more)"
+            
             if score is not None:
                 line += f" (match score: {float(score):.2f})"
             ctx_parts.append(line)
@@ -203,13 +213,23 @@ def gemini_turn_stream(
         ctx_parts.append('\n--- CATALOG RECOMMENDATIONS ---')
         for i, r in enumerate(recommendations[:10], 1):
             nm = (r.get('program_name') or '').strip()
-            inst = (r.get('institution_name') or '').strip()
-            code = (r.get('program_code') or '').strip()
             line = f"{i}. {nm}"
-            if inst:
-                line += f" — {inst}"
-            if code:
-                line += f" [{code}]"
+            
+            institutions = r.get('institutions', [])
+            if institutions:
+                inst_list = []
+                for inst_dict in institutions[:3]:
+                    iname = (inst_dict.get('institution_name') or '').strip()
+                    code = (inst_dict.get('program_code') or '').strip()
+                    if iname and code:
+                        inst_list.append(f"{iname} [{code}]")
+                    elif iname:
+                        inst_list.append(iname)
+                if inst_list:
+                    line += f" — Offered at: {', '.join(inst_list)}"
+                    if len(institutions) > 3:
+                        line += f" (and {len(institutions) - 3} more)"
+            
             ctx_parts.append(line)
     else:
         ctx_parts.append('\n--- CATALOG RECOMMENDATIONS ---')

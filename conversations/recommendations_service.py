@@ -820,27 +820,41 @@ def build_recommendations(
     unknown_recs.sort(key=lambda t: (-t[0], -(t[1] if t[1] is not None else -1.0), t[2].get('program_id') or 0))
     stretch_recs.sort(key=lambda t: (-(t[0] if t[0] is not None else -1.0), -t[1], t[2].get('program_id') or 0))
 
-    recs_all = [x[2] for x in eligible_recs] + [x[2] for x in unknown_recs]
+    def group_recs(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        grouped = {}
+        order = []
+        for r in items:
+            nm = str(r.get('program_name') or '').strip().lower()
+            if not nm:
+                continue
+            if nm not in grouped:
+                grouped[nm] = dict(r)
+                grouped[nm]['institutions'] = []
+                order.append(nm)
+            grouped[nm]['institutions'].append({
+                'program_id': r.get('program_id'),
+                'program_code': r.get('program_code'),
+                'institution_name': r.get('institution_name'),
+                'institution_code': r.get('institution_code'),
+                'campus': r.get('campus'),
+                'region': r.get('region'),
+                'latest_cutoff': r.get('latest_cutoff'),
+                'cost': r.get('cost'),
+                'score': r.get('score'),
+                'stretch_reason': r.get('stretch_reason'),
+            })
+        return [grouped[nm] for nm in order]
+
+    recs_all = group_recs([x[2] for x in eligible_recs] + [x[2] for x in unknown_recs])
     recs = recs_all[:k]
-    stretch_items = [x[2] for x in stretch_recs][:stretch_target]
+    stretch_items = group_recs([x[2] for x in stretch_recs])[:stretch_target]
 
     if not goal_text:
         # Diversify: for users without an explicit goal, return a varied set of programs
         # across fields instead of over-concentrating in one field.
         by_field: Dict[str, List[Dict[str, Any]]] = {}
         field_order: List[str] = []
-        seen: set[str] = set()
         for r in recs_all:
-            try:
-                nm = (r.get('program_name') or '') if isinstance(r, dict) else ''
-                key = str(nm).strip().lower()
-            except Exception:
-                key = ''
-            if key and key in seen:
-                continue
-            if key:
-                seen.add(key)
-
             try:
                 fn = (r.get('field_name') or '').strip() if isinstance(r, dict) else ''
             except Exception:
