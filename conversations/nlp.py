@@ -358,8 +358,17 @@ def compute_confidence(grades: Dict[str, str], traits: Dict[str, float]) -> floa
     return min(1.0, 0.2 * g + 0.1 * t)
 
 
-def analyze(text: str, provider_override: str = '') -> Dict[str, Any]:
+def analyze(text: str, provider_override: str = '', history_text: str = '') -> Dict[str, Any]:
     """End-to-end NLP analysis with optional Gemini provider.
+
+    Args:
+        text: The latest user message.
+        provider_override: Force 'local' or 'gemini' provider.
+        history_text: Formatted prior conversation turns (oldest first),
+            used to give the LLM multi-turn context when the Gemini
+            provider is active.  Format: "User: ...\nAssistant: ...\n..."
+            The local pipeline ignores this argument.
+
     Returns dict with keys: grades, traits, intents, confidence.
     """
     override = (provider_override or '').strip().lower()
@@ -376,7 +385,7 @@ def analyze(text: str, provider_override: str = '') -> Dict[str, Any]:
         if api_key:
             try:
                 from .providers.gemini_provider import analyze_text  # type: ignore
-                out = analyze_text(text, api_key=api_key, model_name=model_name)
+                out = analyze_text(text, api_key=api_key, model_name=model_name, history_text=(history_text or ''))
                 out['provider'] = 'gemini'
                 try:
                     local_intents = detect_intents(text, out.get('grades') or {})

@@ -66,12 +66,15 @@ class Session(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    last_activity_at = models.DateTimeField(auto_now=True)
+    # Manually managed so it can be set explicitly and used in update_fields.
+    # auto_now=True would silently ignore update_fields=['last_activity_at'].
+    last_activity_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['status']),
             models.Index(fields=['expires_at']),
+            models.Index(fields=['owner_uid', 'last_activity_at']),
         ]
 
     def set_external_user_id(self, value: Optional[str]) -> None:
@@ -116,6 +119,8 @@ class Message(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=['session', 'created_at']),
+            # idempotency_key is looked up in every post_message request; index it.
+            models.Index(fields=['session', 'idempotency_key']),
         ]
         constraints = [
             models.UniqueConstraint(

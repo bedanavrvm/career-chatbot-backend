@@ -79,6 +79,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': os.getenv('DRF_THROTTLE_ANON', '60/min'),
         'user': os.getenv('DRF_THROTTLE_USER', '600/min'),
+        # ↓ Applied specifically to LLM-backed chat endpoints to protect API quota.
+        'chat_message': os.getenv('DRF_THROTTLE_CHAT_MESSAGE', '20/min'),
     },
 }
 
@@ -240,3 +242,112 @@ GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip()
 RAG_USE_PGVECTOR = _rag_use_pgvector and bool(_db_url_for_apps)
 RAG_EMBED_DIM = int(os.getenv('RAG_EMBED_DIM', '768') or '768')
 GEMINI_EMBEDDING_MODEL = (os.getenv('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001') or 'gemini-embedding-001').strip()
+
+# --- Default primary key type ---
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Celery ---
+# Set CELERY_BROKER_URL in env to a Redis URL (e.g., redis://localhost:6379/0)
+# or leave unset to use an in-process "always eager" fallback for development.
+_celery_broker = os.getenv('CELERY_BROKER_URL', '').strip()
+_celery_backend = os.getenv('CELERY_RESULT_BACKEND', '').strip()
+
+if _celery_broker:
+    CELERY_BROKER_URL = _celery_broker
+    CELERY_RESULT_BACKEND = _celery_backend or _celery_broker
+    CELERY_TASK_ALWAYS_EAGER = False
+else:
+    # Development fallback: run tasks synchronously in the same process
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
+
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+# Expire task results after 1 hour to avoid unbounded result storage
+CELERY_RESULT_EXPIRES = 3600
+CELERY_TASK_TRACK_STARTED = True
+# Allow LLM tasks up to 90 s before being killed
+CELERY_TASK_SOFT_TIME_LIMIT = 75
+CELERY_TASK_TIME_LIMIT = 90
+
+# --- Logging ---
+_log_level = 'DEBUG' if DEBUG else 'INFO'
+_log_handlers = ['console']
+if DEBUG:
+    _log_handlers.append('file')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {process:d} {message}',
+            'style': '{',
+        },
+        'json': {
+            '()': 'logging.Formatter',
+            'format': '{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","pid":%(process)d,"msg":%(message)s}',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose' if DEBUG else 'json',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': BASE_DIR / 'logs' / 'debug.log',
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'django': {
+            'handlers': _log_handlers,
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'django.request': {
+            'handlers': _log_handlers,
+            'level': 'ERROR',
+            'propagate': True,
+        },
+        'django.security': {
+            'handlers': _log_handlers,
+            'level': 'ERROR',
+            'propagate': True,
+        },
+        # App loggers
+        'accounts': {
+            'handlers': _log_handlers,
+            'level': _log_level,
+            'propagate': True,
+        },
+        'conversations': {
+            'handlers': _log_handlers,
+            'level': _log_level,
+            'propagate': True,
+        },
+        'catalog': {
+            'handlers': _log_handlers,
+            'level': _log_level,
+            'propagate': True,
+        },
+        'vectorstore': {
+            'handlers': _log_handlers,
+            'level': _log_level,
+            'propagate': True,
+        },
+        'utils': {
+            'handlers': _log_handlers,
+            'level': _log_level,
+            'propagate': True,
+        },
+    },
+}

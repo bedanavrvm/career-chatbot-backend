@@ -18,12 +18,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Django checks & migrate
+      - name: Django system checks (dev mode)
         env:
           DJANGO_DEBUG: 'True'
-        run: |
-          python manage.py check --deploy --fail-level WARNING
-          python manage.py migrate --noinput
-      - name: Run tests (if present)
-        run: |
-          python manage.py test
+        run: python manage.py check
+      - name: Django deploy checks (simulated production)
+        env:
+          DJANGO_DEBUG: 'False'
+          DJANGO_ENV: 'production'
+          DJANGO_SECRET_KEY: 'ci-only-throwaway-key-not-used-anywhere-${{ github.run_id }}'
+          ALLOWED_HOSTS: 'localhost'
+          # Generate a valid Fernet key for CI validation
+          PII_ENCRYPTION_KEY: ${{ secrets.CI_PII_ENCRYPTION_KEY || vars.CI_PII_ENCRYPTION_KEY }}
+        run: python manage.py check --deploy --fail-level WARNING
+      - name: Run migrations (dev mode)
+        env:
+          DJANGO_DEBUG: 'True'
+        run: python manage.py migrate --noinput
+      - name: Run tests
+        run: python manage.py test

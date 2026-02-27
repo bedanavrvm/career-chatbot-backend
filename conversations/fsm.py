@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple
 from django.conf import settings
@@ -8,6 +11,8 @@ except Exception:
 from .models import Session, Profile
 from . import nlp
 from .recommend import recommend_top_k, infer_career_paths, lookup_institutions_for_program, lookup_institutions_by_region, suggest_program_titles
+
+logger = logging.getLogger(__name__)
 try:
     from accounts.models import UserProfile as _UserProfile, OnboardingProfile as _OnboardingProfile
 except Exception:
@@ -29,15 +34,23 @@ except Exception:
     retrieve_catalog_documents = None  # type: ignore
 
 try:
-    from scripts.etl.kuccps.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
-except Exception:
-    _SUBJECT_CODE_ALIASES = {}
-    _SUBJECT_CANON_TO_NUM = {}
-    _SUBJECT_TOKEN_ALIASES = {}
-    _SUBJECT_TOKEN_CANON_TO_ALIASES = {}
+    # P3.4: prefer the stable catalog-owned re-export; fall back to raw ETL path
+    from catalog.utils.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
+    from catalog.utils.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
+    from catalog.utils.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
+    from catalog.utils.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
+except ImportError:
+    try:
+        from scripts.etl.kuccps.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
+    except Exception as _e:
+        logger.warning('FSM: eligibility constants unavailable — subject matching disabled: %s', _e)
+        _SUBJECT_CODE_ALIASES = {}
+        _SUBJECT_CANON_TO_NUM = {}
+        _SUBJECT_TOKEN_ALIASES = {}
+        _SUBJECT_TOKEN_CANON_TO_ALIASES = {}
 
 
 @dataclass
@@ -81,32 +94,25 @@ def _top_traits(traits: Dict[str, float], limit: int = 3, min_weight: float = 0.
     return out
 
 
-_GRADE_POINTS = {
-    'A': 12,
-    'A-': 11,
-    'B+': 10,
-    'B': 9,
-    'B-': 8,
-    'C+': 7,
-    'C': 6,
-    'C-': 5,
-    'D+': 4,
-    'D': 3,
-    'D-': 2,
-    'E': 1,
-}
+try:
+    from utils.grades import (
+        normalize_grade as _norm_grade,
+        meets_min_grade as _meets_min_grade,
+        GRADE_POINTS as _GRADE_POINTS,
+    )
+except ImportError:
+    # Fallback in case utils package is not available in testing context
+    _GRADE_POINTS = {'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'E': 1}  # type: ignore[assignment]
 
+    def _norm_grade(g: str) -> str:  # type: ignore[misc]
+        return str(g or '').strip().upper().replace(' ', '')
 
-def _norm_grade(g: str) -> str:
-    return str(g or '').strip().upper().replace(' ', '')
-
-
-def _meets_min_grade(candidate: str, minimum: str) -> bool:
-    c = _GRADE_POINTS.get(_norm_grade(candidate))
-    m = _GRADE_POINTS.get(_norm_grade(minimum))
-    if c is None or m is None:
-        return False
-    return int(c) >= int(m)
+    def _meets_min_grade(candidate: str, minimum: str) -> bool:  # type: ignore[misc]
+        c = _GRADE_POINTS.get(_norm_grade(candidate))
+        m = _GRADE_POINTS.get(_norm_grade(minimum))
+        if c is None or m is None:
+            return False
+        return int(c) >= int(m)
 
 
 def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
@@ -199,6 +205,13 @@ def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
     except Exception:
         pass
 
+    try:
+        edu = (getattr(ob, 'education_level', '') or '').strip().lower()
+        if edu:
+            prefs['education_level'] = edu
+    except Exception:
+        pass
+
     changed = False
     if traits and not (prof.traits or {}):
         prof.traits = traits
@@ -230,13 +243,42 @@ def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
         prof.save(update_fields=['traits', 'grades', 'preferences', 'updated_at'])
 
 
+def _build_history_text(session: Session, max_turns: int = 8) -> str:
+    """Build a formatted conversation history string from recent messages.
+
+    Returns at most ``max_turns`` prior messages (User/Assistant pairs)
+    formatted as plain text for inclusion in LLM prompts.
+    """
+    try:
+        msgs = list(
+            session.messages.order_by('-created_at')[:max_turns * 2]
+        )
+        msgs.reverse()
+        lines = []
+        for m in msgs:
+            role = 'User' if getattr(m, 'role', '') == 'user' else 'Assistant'
+            try:
+                content = m.content or ''
+            except Exception as _ce:
+                logger.debug('FSM: could not read message content: %s', _ce)
+                content = ''
+            if content:
+                lines.append(f"{role}: {content}")
+        return '\n'.join(lines)
+    except Exception as _he:
+        logger.warning('FSM: _build_history_text failed: %s', _he)
+        return ''
+
+
 def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
     """Compute the next assistant reply/state from user_text using lightweight NLP.
     - Updates session slots and profile (grades/traits) deterministically.
     - Applies a confidence threshold to trigger clarifying prompts.
+    - Passes recent conversation history to the LLM for multi-turn awareness.
     States: greeting -> collect_interests -> summarize
     """
-    analysis = nlp.analyze(user_text, provider_override=provider_override)
+    history_text = _build_history_text(session)
+    analysis = nlp.analyze(user_text, provider_override=provider_override, history_text=history_text)
     conf = float(analysis.get('confidence') or 0.0)
     grades = analysis.get('grades') or {}
     traits = analysis.get('traits') or {}
@@ -475,8 +517,8 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         tuse = _top_traits(prof.traits or {}, limit=3, min_weight=0.15)
         itxt = ", ".join(list(tuse.keys())) or "(none)"
         goals = _get_career_goals()
-        goal_text = _goal_text_for_recommendation()
-        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text)
+        level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
+        recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=goal_text, level=level)
 
         if isinstance(analysis, dict):
             analysis['turn_recommendations'] = {
@@ -486,7 +528,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 'stretch_recommendations': [],
                 'goal_text': str(goal_text or '').strip(),
                 'k': 5,
-                'level': 'bachelor',
+                'level': level,
             }
         # Persist the last recommendation set for follow-ups like "Why?" and "Which do I qualify for?"
         try:
@@ -720,7 +762,8 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                     nlp_payload=analysis,
                 )
 
-            candidates = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text=goal_q)
+            level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
+            candidates = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text=goal_q, level=level)
             if not isinstance(candidates, list) or not candidates:
                 return TurnResult(
                     reply=f"I couldn't find KUCCPS catalog matches for '{goal_q}'. Try a more specific phrasing like 'medicine (MBChB)' or 'nursing'.",
@@ -825,7 +868,8 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                     lines.append(f"Common missing requirements: {', '.join(uniq)}")
 
             # Provide alternatives the learner *can* do now (trait-driven, eligibility-checked).
-            alts = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text='')
+            level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
+            alts = recommend_top_k(grades_map, prof.traits or {}, k=25, goal_text='', level=level)
             alt_ids: List[int] = []
             for a in (alts or []):
                 try:
@@ -964,7 +1008,8 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
 
             goals = _get_career_goals()
             goal_text = " ".join([g for g in goals if str(g).strip()]).strip()
-            candidates = recommend_top_k(prof.grades or {}, prof.traits or {}, k=25, goal_text=goal_text)
+            level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
+            candidates = recommend_top_k(prof.grades or {}, prof.traits or {}, k=25, goal_text=goal_text, level=level)
             cand_ids: List[int] = []
             for c in (candidates or []):
                 try:

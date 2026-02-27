@@ -421,11 +421,11 @@ def lookup_institutions_by_region(region: str, limit: int = 30) -> List[Dict[str
 
     return []
 
-def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '') -> List[Dict[str, Any]]:
+def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '', level: str = 'bachelor') -> List[Dict[str, Any]]:
     if Program is None:
         return []
     try:
-        qs = Program.objects.select_related('institution', 'field').filter(level='bachelor')
+        qs = Program.objects.select_related('institution', 'field').filter(level=str(level or 'bachelor'))
     except Exception:
         return []
 
@@ -538,11 +538,11 @@ def _load_program_rows(limit: int = 0) -> List[Dict[str, str]]:
     return rows
 
 
-def recommend_top_k(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '') -> List[Dict[str, Any]]:
+def recommend_top_k(grades: Dict[str, str], traits: Dict[str, float], k: int = 5, goal_text: str = '', level: str = 'bachelor') -> List[Dict[str, Any]]:
     # Inline: Recommend top-K programs filtered by eligibility (when available) and scored by traits
     try:
         if Program is not None:
-            out_db = _recommend_top_k_db(grades or {}, traits or {}, k=k, goal_text=goal_text)
+            out_db = _recommend_top_k_db(grades or {}, traits or {}, k=k, goal_text=goal_text, level=level)
             if out_db:
                 return out_db
     except Exception:

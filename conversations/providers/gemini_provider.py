@@ -5,8 +5,15 @@ from typing import Any, Dict, List
 # Optional Gemini provider adapter. Only used when settings.NLP_PROVIDER == 'gemini'.
 # Expects settings.GEMINI_API_KEY and optional settings.GEMINI_MODEL (default: 'gemini-1.5-flash').
 
-def analyze_text(text: str, *, api_key: str, model_name: str = 'gemini-1.5-flash') -> Dict[str, Any]:
+def analyze_text(text: str, *, api_key: str, model_name: str = 'gemini-1.5-flash', history_text: str = '') -> Dict[str, Any]:
     """Call Gemini to analyze free text and return a structured payload compatible with nlp.analyze.
+
+    Args:
+        text: The latest user message.
+        api_key: Gemini API key.
+        model_name: Model name to use.
+        history_text: Prior conversation turns (oldest first) to provide
+            multi-turn context. Format: "User: ...\nAssistant: ..."
 
     Returns a dict with keys: grades (dict), traits (dict), intents (list), confidence (float).
     On any error, raises an exception to allow caller to fallback to local NLP.
@@ -38,7 +45,11 @@ def analyze_text(text: str, *, api_key: str, model_name: str = 'gemini-1.5-flash
         "If information is absent, use empty values. Confidence reflects how certain you are.\n"
         "Output JSON only, no markdown, no extra text."
     )
-    prompt = f"User: {text.strip()}\nReturn JSON now."
+    # Build prompt: prepend history for multi-turn context
+    history_section = ''
+    if history_text and history_text.strip():
+        history_section = f"Conversation history (for context only):\n{history_text.strip()}\n\n"
+    prompt = f"{history_section}Latest user message: {text.strip()}\nReturn JSON now."
 
     resp = client.models.generate_content(
         model=model_name,
@@ -214,3 +225,119 @@ def compose_rag_answer(user_text: str, sources: List[Dict[str, Any]], *, api_key
     )
     text = (resp.text or '').strip()
     return _sanitize_plain_text(text) or ""
+
+
+# ---------------------------------------------------------------------------
+# Streaming variants — for SSE endpoints
+# ---------------------------------------------------------------------------
+
+def compose_answer_stream(
+    user_text: str,
+    context: Dict[str, Any],
+    *,
+    api_key: str,
+    model_name: str = 'gemini-1.5-flash',
+    history_text: str = '',
+):
+    """Streaming version of compose_answer. Yields raw text chunks as they arrive.
+
+    Usage::
+
+        for chunk in compose_answer_stream(text, ctx, api_key=key):
+            yield chunk  # send as SSE 'delta' event
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key.strip())
+
+    system = (
+        "You are a career guidance assistant. You MUST ground responses ONLY on the provided context.\n"
+        "Rules:\n"
+        "- Do NOT invent universities, programs, or data not present in context.\n"
+        "- If asked 'which programs', list specific program titles from 'program_titles' or from 'program_recommendations'.\n"
+        "- If asked 'which universities', list items from 'institutions' in context.\n"
+        "- Keep answers concise and helpful.\n"
+        "- If insufficient data, ask a pointed follow-up (1 short line).\n"
+        "Formatting:\n"
+        "- Output plain text only (no markdown, no asterisks, no bullet characters).\n"
+        "- If listing items, use simple numbered lines like '1. ...', '2. ...'.\n"
+        "- Avoid long lists: default to 5 items max unless the user asks for more."
+    )
+
+    history_section = ''
+    if history_text and history_text.strip():
+        history_section = f"Conversation history (for context):\n{history_text.strip()}\n\n"
+
+    ctx_json = json.dumps(context, ensure_ascii=False)
+    prompt = (
+        f"{history_section}"
+        f"User: {user_text.strip()}\n"
+        f"Context JSON (authoritative): {ctx_json}\n"
+        "Compose the best possible grounded answer now."
+    )
+
+    for chunk in client.models.generate_content_stream(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0,
+        ),
+    ):
+        text = getattr(chunk, 'text', None) or ''
+        if text:
+            yield text
+
+
+def compose_rag_answer_stream(
+    user_text: str,
+    sources: List[Dict[str, Any]],
+    *,
+    api_key: str,
+    model_name: str = 'gemini-1.5-flash',
+    history_text: str = '',
+):
+    """Streaming version of compose_rag_answer. Yields raw text chunks as they arrive."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key.strip())
+
+    system = (
+        "You are a career guidance assistant. You MUST answer ONLY using the provided SOURCES.\n"
+        "Rules:\n"
+        "- Do NOT invent programs, universities, costs, cutoffs, or requirements not present in SOURCES.\n"
+        "- Every factual claim MUST have at least one citation like [P1] or [P2].\n"
+        "- If SOURCES do not contain the answer, say you don't have enough information and ask 1 short follow-up question.\n"
+        "Formatting:\n"
+        "- Output plain text only (no markdown, no asterisks, no bullet characters).\n"
+        "- If listing items, use simple numbered lines like '1. ...', '2. ...'.\n"
+        "- Keep citations inline at the end of the relevant sentence, e.g., '... [P1]'.\n"
+        "- Avoid long lists: default to 5 items max unless the user asks for more."
+    )
+
+    history_section = ''
+    if history_text and history_text.strip():
+        history_section = f"Conversation history (for context):\n{history_text.strip()}\n\n"
+
+    src_json = json.dumps(sources or [], ensure_ascii=False)
+    prompt = (
+        f"{history_section}"
+        f"User: {user_text.strip()}\n"
+        f"SOURCES JSON (authoritative): {src_json}\n"
+        "Answer the user, grounded strictly in SOURCES, with citations."
+    )
+
+    for chunk in client.models.generate_content_stream(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0,
+        ),
+    ):
+        text = getattr(chunk, 'text', None) or ''
+        if text:
+            yield text
+

@@ -1,20 +1,42 @@
 import json
+import logging
 from typing import Any, Dict, Optional
 
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 from django.conf import settings
 
+logger = logging.getLogger(__name__)
+
 from rest_framework import status
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes as throttle_classes_decorator
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.throttling import UserRateThrottle
 
 from utils.drf_auth import FirebaseAuthentication, IsFirebaseAuthenticated
 from utils.errors import error_response
+from utils.grades import grade_points as _grade_points_util, meets_min_grade as _meets_min_grade_util
 from .models import Session, Message, Profile
 from .serializers import PostMessageSerializer, PostProfileSerializer
 from .fsm import next_turn
 from .orchestrator import planner_turn
 from .recommendations_service import build_recommendations
+
+
+class ChatMessageThrottle(UserRateThrottle):
+    """Dedicated per-user rate limit for LLM-backed chat endpoints.
+    Keeps expensive NLP/LLM calls well below the global 600/min ceiling.
+    Override via DRF_THROTTLE_RATES['chat_message'] in settings.
+    """
+    scope = 'chat_message'
+    rate = '20/min'
+
+
+class SessionPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 50
 
 try:
     from accounts.models import UserProfile as _UserProfile, OnboardingProfile as _OnboardingProfile  # type: ignore
@@ -23,17 +45,27 @@ except Exception:
     _OnboardingProfile = None
 
 try:
-    from scripts.etl.kuccps.eligibility import evaluate_eligibility as _kuccps_evaluate_eligibility  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
-    from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
-except Exception:
-    _kuccps_evaluate_eligibility = None
-    _SUBJECT_CODE_ALIASES = {}
-    _SUBJECT_CANON_TO_NUM = {}
-    _SUBJECT_TOKEN_ALIASES = {}
-    _SUBJECT_TOKEN_CANON_TO_ALIASES = {}
+    # P3.4: use the stable catalog-owned re-export
+    from catalog.utils.eligibility import (
+        evaluate_eligibility as _kuccps_evaluate_eligibility,
+        SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES,
+        SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM,
+        SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES,
+        SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES,
+    )  # type: ignore
+except ImportError:
+    try:
+        from scripts.etl.kuccps.eligibility import evaluate_eligibility as _kuccps_evaluate_eligibility  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_CODE_ALIASES as _SUBJECT_CODE_ALIASES  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_CANON_TO_NUM as _SUBJECT_CANON_TO_NUM  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_ALIASES as _SUBJECT_TOKEN_ALIASES  # type: ignore
+        from scripts.etl.kuccps.eligibility import SUBJECT_TOKEN_CANON_TO_ALIASES as _SUBJECT_TOKEN_CANON_TO_ALIASES  # type: ignore
+    except Exception:
+        _kuccps_evaluate_eligibility = None
+        _SUBJECT_CODE_ALIASES = {}
+        _SUBJECT_CANON_TO_NUM = {}
+        _SUBJECT_TOKEN_ALIASES = {}
+        _SUBJECT_TOKEN_CANON_TO_ALIASES = {}
 
 
 def _now():
@@ -99,14 +131,25 @@ def get_session(request, session_id):
     if err:
         return err
     try:
-        try:
-            s = Session.objects.get(id=session_id)
-        except Session.DoesNotExist:
-            s = Session(id=session_id)
-            s.owner_uid = uid
-            s.set_external_user_id(uid)
-            s.ensure_ttl()
-            s.save()
+        # Use atomic get-or-create with select_for_update to prevent a race
+        # condition where two concurrent GETs for the same new session_id would
+        # both succeed in creating a session. Pattern mirrors post_message.
+        with transaction.atomic():
+            try:
+                s = Session.objects.select_for_update().get(id=session_id)
+            except Session.DoesNotExist:
+                try:
+                    s = Session.objects.create(
+                        id=session_id,
+                        owner_uid=uid,
+                    )
+                    s.set_external_user_id(uid)
+                    s.ensure_ttl()
+                    s.last_activity_at = _now()
+                    s.save()
+                except IntegrityError:
+                    s = Session.objects.select_for_update().get(id=session_id)
+
         if s.owner_uid and s.owner_uid != uid:
             return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         if not s.owner_uid:
@@ -135,13 +178,13 @@ def sessions_collection(request):
     if err:
         return err
     if request.method == 'GET':
-        try:
-            limit = int(request.GET.get('limit', '20') or '20')
-        except Exception:
-            limit = 20
-        limit = max(1, min(50, limit))
         qs = Session.objects.filter(owner_uid=uid).order_by('-last_activity_at')
-        items = [_serialize_session_list_item(s) for s in qs[:limit]]
+        paginator = SessionPagination()
+        page = paginator.paginate_queryset(qs, request)
+        if page is not None:
+            items = [_serialize_session_list_item(s) for s in page]
+            return paginator.get_paginated_response(items)
+        items = [_serialize_session_list_item(s) for s in qs[:20]]
         return Response({'count': qs.count(), 'results': items})
 
     if request.method == 'POST':
@@ -161,28 +204,14 @@ def sessions_collection(request):
 
 
 def _grade_points(g: str) -> int:
-    s = (g or '').strip().upper().replace(' ', '')
-    mapping = {
-        'A': 12,
-        'A-': 11,
-        'B+': 10,
-        'B': 9,
-        'B-': 8,
-        'C+': 7,
-        'C': 6,
-        'C-': 5,
-        'D+': 4,
-        'D': 3,
-        'D-': 2,
-        'E': 1,
-    }
-    return int(mapping.get(s, 0))
+    """Thin wrapper around utils.grades.grade_points, returns 0 for unknown grades."""
+    return _grade_points_util(g) or 0
 
 
 def _meets_min_grade(user_grade: str, min_grade: str) -> bool:
     if not (min_grade or '').strip():
         return True
-    return _grade_points(user_grade) >= _grade_points(min_grade)
+    return _meets_min_grade_util(user_grade, min_grade)
 
 
 def _has_meaningful_grades(grades: Dict[str, str]) -> bool:
@@ -599,12 +628,32 @@ def session_recommendations(request, session_id):
             k = 10
         k = max(1, min(20, k))
 
+        # P2.2: Derive recommendation level from the user's education level
+        # instead of always forcing 'bachelor'.
+        level = 'bachelor'  # safe default
+        try:
+            if _UserProfile is not None and _OnboardingProfile is not None:
+                up = _UserProfile.objects.filter(uid=uid).first()
+                if up:
+                    ob = _OnboardingProfile.objects.filter(user=up).first()
+                    if ob and ob.education_level:
+                        edu = str(ob.education_level).strip().lower()
+                        if edu == 'college_student':
+                            # Already enrolled — suggest diploma/certificate options too
+                            level = 'diploma'
+                        elif edu == 'college_graduate':
+                            # Graduate — steer toward masters/postgrad
+                            level = 'masters'
+                        # high_school → 'bachelor' (default)
+        except Exception:
+            pass
+
         recs, stretch_items = build_recommendations(
             grades,
             traits,
             goal_text=goal_text,
             k=k,
-            level='bachelor',
+            level=level,
             raise_on_missing_catalog=True,
         )
 
@@ -655,6 +704,7 @@ def delete_session(request, session_id):
 @api_view(['POST'])
 @authentication_classes([FirebaseAuthentication])
 @permission_classes([IsFirebaseAuthenticated])
+@throttle_classes_decorator([ChatMessageThrottle])
 def post_message(request, session_id):
     """POST /api/conversations/sessions/{id}/messages
     Body: { text: str, idempotency_key?: str, user_id?: str }
@@ -673,10 +723,25 @@ def post_message(request, session_id):
         nlp_provider = (ser.validated_data.get('nlp_provider') or '').strip().lower()
         use_planner = bool(ser.validated_data.get('use_planner')) if 'use_planner' in ser.validated_data else bool(getattr(settings, 'CHAT_PLANNER_ENABLED', False))
         shadow_mode = bool(getattr(settings, 'CHAT_PLANNER_SHADOW_MODE', False))
-        try:
-            s = Session.objects.get(id=session_id)
-        except Session.DoesNotExist:
-            s = Session(id=session_id)
+        # Atomic get-or-create to prevent race condition when concurrent
+        # requests arrive for the same new session_id.
+        with transaction.atomic():
+            try:
+                s = Session.objects.select_for_update().get(id=session_id)
+            except Session.DoesNotExist:
+                try:
+                    s = Session.objects.create(
+                        id=session_id,
+                        owner_uid=uid,
+                    )
+                    s.set_external_user_id(uid)
+                    s.ensure_ttl()
+                    s.last_activity_at = _now()
+                    s.save()
+                except IntegrityError:
+                    # Another concurrent request already created it
+                    s = Session.objects.select_for_update().get(id=session_id)
+
         if s.owner_uid and s.owner_uid != uid:
             return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
         if not s.owner_uid:
@@ -747,6 +812,7 @@ def post_message(request, session_id):
 
         return Response({'session': _serialize_session(s), 'turn_recommendations': turn_recs})
     except Exception as e:
+        logger.exception("post_message failed for session_id=%s uid=%s", session_id, uid if 'uid' in dir() else 'unknown')
         detail = 'Server error'
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
@@ -786,13 +852,15 @@ def post_profile(request):
             s.save(update_fields=['owner_uid', 'external_user_id_encrypted'])
 
         prof, _ = Profile.objects.get_or_create(session=s)
-        prof.traits = ser.validated_data.get('traits') or {}
-        prof.grades = ser.validated_data.get('grades') or {}
-        prof.preferences = ser.validated_data.get('preferences') or {}
-        v = ser.validated_data.get('version')
-        if isinstance(v, str) and v:
-            prof.version = v
-        prof.save()
+        with transaction.atomic():
+            prof = Profile.objects.select_for_update().get(session=s)
+            prof.traits = ser.validated_data.get('traits') or {}
+            prof.grades = ser.validated_data.get('grades') or {}
+            prof.preferences = ser.validated_data.get('preferences') or {}
+            v = ser.validated_data.get('version')
+            if isinstance(v, str) and v:
+                prof.version = v
+            prof.save()
         return Response({
             'session_id': str(s.id),
             'profile': {
@@ -807,3 +875,353 @@ def post_profile(request):
         if settings.DEBUG:
             detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
         return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
+
+
+# ---------------------------------------------------------------------------
+# Async message endpoint (P1.1) — dispatches to Celery, returns task_id
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
+@throttle_classes_decorator([ChatMessageThrottle])
+def post_message_async(request, session_id):
+    """POST /api/conversations/sessions/{id}/messages/async
+
+    Non-blocking alternative to post_message.  Dispatches the FSM/LLM call
+    to a Celery worker and immediately returns a ``task_id``.  The client
+    should poll GET /api/conversations/tasks/{task_id}/status until
+    ``state`` == ``SUCCESS`` or ``FAILURE``.
+
+    When no Celery broker is configured (CELERY_TASK_ALWAYS_EAGER=True),
+    the task executes synchronously and the response contains the full
+    result alongside task_id.
+    """
+    from .tasks import process_message_task
+
+    uid, err = _require_uid(request)
+    if err:
+        return err
+
+    try:
+        ser = PostMessageSerializer(data=(request.data if hasattr(request, 'data') else {}))
+        if not ser.is_valid():
+            return error_response(
+                'Invalid request',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='validation_error',
+                fields=ser.errors,
+            )
+
+        text = ser.validated_data.get('text')
+        idem = (ser.validated_data.get('idempotency_key') or '').strip()
+        nlp_provider = (ser.validated_data.get('nlp_provider') or '').strip().lower()
+        use_planner = (
+            bool(ser.validated_data.get('use_planner'))
+            if 'use_planner' in ser.validated_data
+            else bool(getattr(settings, 'CHAT_PLANNER_ENABLED', False))
+        )
+        shadow_mode = bool(getattr(settings, 'CHAT_PLANNER_SHADOW_MODE', False))
+
+        task = process_message_task.apply_async(
+            kwargs=dict(
+                session_id=str(session_id),
+                uid=uid,
+                text=text,
+                idempotency_key=idem,
+                nlp_provider=nlp_provider,
+                use_planner=use_planner,
+                shadow_mode=shadow_mode,
+            )
+        )
+
+        # In eager mode the task already finished
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            result = task.result or {}
+            if isinstance(result, dict) and result.get('error'):
+                return error_response(
+                    result['error'],
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    code='task_failed',
+                )
+            return Response({
+                'task_id': task.id,
+                'state': 'SUCCESS',
+                'result': result,
+            })
+
+        return Response({'task_id': task.id, 'state': 'PENDING'}, status=status.HTTP_202_ACCEPTED)
+
+    except Exception as e:
+        logger.exception('post_message_async failed for session_id=%s uid=%s', session_id, uid)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
+
+
+@api_view(['GET'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
+def get_task_status(request, task_id):
+    """GET /api/conversations/tasks/{task_id}/status
+
+    Returns the state and result of an async message task.
+    States: PENDING | STARTED | SUCCESS | FAILURE | RETRY
+    """
+    from celery.result import AsyncResult
+
+    uid, err = _require_uid(request)
+    if err:
+        return err
+
+    try:
+        result = AsyncResult(str(task_id))
+        state = result.state
+
+        if state == 'SUCCESS':
+            value = result.result or {}
+            if isinstance(value, dict) and value.get('error'):
+                return Response({'task_id': task_id, 'state': 'FAILURE', 'error': value['error']})
+            return Response({'task_id': task_id, 'state': 'SUCCESS', 'result': value})
+
+        if state == 'FAILURE':
+            return Response(
+                {'task_id': task_id, 'state': 'FAILURE', 'error': str(result.result or 'Task failed')},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # PENDING, STARTED, RETRY
+        return Response({'task_id': task_id, 'state': state}, status=status.HTTP_202_ACCEPTED)
+
+    except Exception as e:
+        logger.exception('get_task_status failed task_id=%s', task_id)
+        detail = 'Server error'
+        if settings.DEBUG:
+            detail = f"{detail}: {e.__class__.__name__}: {str(e)}".strip()
+        return error_response(detail, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='server_error')
+
+
+# ---------------------------------------------------------------------------
+# SSE streaming endpoint (P1.1 replacement for Celery)
+# ---------------------------------------------------------------------------
+
+def _sse_event(event: str, data: str) -> str:
+    """Format a single SSE event frame."""
+    # Replace newlines in data to keep each frame on one logical line
+    safe = data.replace('\n', '\\n')
+    return f"event: {event}\ndata: {safe}\n\n"
+
+
+def _stream_reply(session, user_text: str, tr, nlp_provider: str):
+    """
+    Generator that yields SSE-formatted strings.
+    - 'delta' events: text chunks from the Gemini streaming API
+    - 'done'  event: JSON blob with the final session + turn_recommendations
+    - 'error' event: error message string if something goes wrong
+    """
+    api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
+    model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
+    use_gemini = bool(api_key) and (nlp_provider or '').lower() in ('', 'gemini')
+
+    history_text = ''
+    try:
+        from .fsm import _build_history_text
+        history_text = _build_history_text(session)
+    except Exception as _he:
+        logger.warning('SSE: could not build history_text: %s', _he)
+
+    full_reply = tr.reply  # pre-computed FSM reply (fallback)
+    streamed = False
+
+    if use_gemini and tr.nlp_payload:
+        # Build context dict the same way the sync path does
+        try:
+            from .providers.gemini_provider import compose_answer_stream, compose_rag_answer_stream  # type: ignore
+
+            # Check if RAG sources are present
+            sources = tr.nlp_payload.get('rag_sources') or []
+            ctx = {
+                'grades': session.slots.get('grades') or {},
+                'traits': session.slots.get('traits') or {},
+                'career_paths': tr.nlp_payload.get('career_paths') or [],
+                'program_recommendations': (tr.nlp_payload.get('turn_recommendations') or {}).get('recommendations') or [],
+                'program_titles': tr.nlp_payload.get('program_titles') or [],
+                'institutions': tr.nlp_payload.get('institutions') or [],
+            }
+
+            buffer = []
+            stream_fn = compose_rag_answer_stream if sources else compose_answer_stream
+            stream_args = (user_text, sources if sources else ctx)
+            for chunk in stream_fn(
+                *stream_args,
+                api_key=api_key,
+                model_name=model_name,
+                history_text=history_text,
+            ):
+                buffer.append(chunk)
+                yield _sse_event('delta', chunk)
+
+            if buffer:
+                full_reply = ''.join(buffer)
+                streamed = True
+
+        except Exception as se:
+            logger.warning('SSE: Gemini streaming failed, falling back to pre-computed reply: %s', se)
+            # Fall through — send pre-computed reply as a single delta
+            if not streamed:
+                yield _sse_event('delta', full_reply)
+    else:
+        # Non-Gemini or no API key: emit the entire pre-computed reply at once
+        yield _sse_event('delta', full_reply)
+
+    # Persist the assistant message (with the streamed/full reply)
+    try:
+        am = Message(session=session, role='assistant')
+        am.content = full_reply
+        am.fsm_state = tr.next_state
+        am.nlp = tr.nlp_payload or {}
+        am.confidence = tr.confidence
+        am.save()
+    except Exception as pe:
+        logger.exception('SSE: failed to save assistant message: %s', pe)
+
+    # Update session state
+    try:
+        session.fsm_state = tr.next_state
+        session.slots = tr.slots
+        session.last_activity_at = _now()
+        session.save(update_fields=['fsm_state', 'slots', 'last_activity_at', 'updated_at'])
+    except Exception as ue:
+        logger.exception('SSE: failed to update session state: %s', ue)
+
+    # Build done payload
+    try:
+        turn_recs = tr.nlp_payload.get('turn_recommendations') if tr.nlp_payload else None
+        done_payload = json.dumps({
+            'session': _serialize_session(session),
+            'turn_recommendations': turn_recs,
+        }, ensure_ascii=False)
+        yield _sse_event('done', done_payload)
+    except Exception as de:
+        logger.exception('SSE: failed to build done payload: %s', de)
+        yield _sse_event('done', '{}')
+
+
+@api_view(['POST'])
+@authentication_classes([FirebaseAuthentication])
+@permission_classes([IsFirebaseAuthenticated])
+def post_message_stream(request, session_id):
+    """POST /api/conversations/sessions/{session_id}/messages/stream
+
+    Streams the assistant reply as Server-Sent Events:
+      event: delta  — text token chunks as they arrive from Gemini
+      event: done   — final JSON {session, turn_recommendations}
+      event: error  — error string if something fails
+
+    Falls back to a single delta + done if Gemini streaming is unavailable.
+    The client should use fetch() with a ReadableStream reader (not EventSource,
+    since we POST with a body).
+    """
+    from django.http import StreamingHttpResponse
+
+    uid, err = _require_uid(request)
+    if err:
+        return err
+
+    serializer = PostMessageSerializer(data=request.data)
+    if not serializer.is_valid():
+        return error_response('Invalid payload', status_code=status.HTTP_400_BAD_REQUEST,
+                              code='invalid_payload', fields=serializer.errors)
+
+    text = str(serializer.validated_data.get('text') or '').strip()
+    idempotency_key = str(serializer.validated_data.get('idempotency_key') or '').strip()
+    nlp_provider = str(serializer.validated_data.get('nlp_provider') or '').strip()
+
+    if not text:
+        return error_response('text is required', status_code=status.HTTP_400_BAD_REQUEST, code='missing_text')
+
+    # --- Get or create session ---
+    try:
+        with transaction.atomic():
+            try:
+                session = Session.objects.select_for_update().get(id=session_id)
+            except Session.DoesNotExist:
+                session = Session.objects.create(
+                    id=session_id,
+                    owner_uid=uid,
+                )
+                session.set_external_user_id(uid)
+                session.ensure_ttl()
+                session.last_activity_at = _now()
+                session.save()
+    except Exception as e:
+        logger.exception('SSE: session get_or_create failed for session_id=%s uid=%s', session_id, uid)
+        return error_response('Session error', status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='session_error')
+
+    if session.owner_uid and session.owner_uid != uid:
+        return error_response('Forbidden', status_code=status.HTTP_403_FORBIDDEN, code='forbidden')
+
+    # Ensure TTL and activity updated
+    session.ensure_ttl()
+    session.last_activity_at = _now()
+    session.save(update_fields=['expires_at', 'last_activity_at'])
+
+    # --- Idempotency check ---
+    if idempotency_key:
+        existing = Message.objects.filter(
+            session=session, role='user', idempotency_key=idempotency_key
+        ).first()
+        if existing:
+            # Already processed — stream a replay of the cached assistant reply
+            assistant_msg = Message.objects.filter(
+                session=session, role='assistant',
+                created_at__gte=existing.created_at
+            ).order_by('created_at').first()
+            reply = (assistant_msg.content if assistant_msg else '') or ''
+
+            def _replay_generator():
+                if reply:
+                    yield _sse_event('delta', reply)
+                done_payload = json.dumps({'session': _serialize_session(session), 'turn_recommendations': None}, ensure_ascii=False)
+                yield _sse_event('done', done_payload)
+
+            response = StreamingHttpResponse(_replay_generator(), content_type='text/event-stream; charset=utf-8')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+    # --- Persist user message ---
+    try:
+        um = Message(session=session, role='user', idempotency_key=idempotency_key)
+        um.content = text
+        um.fsm_state = session.fsm_state
+        # tr.nlp_payload will be set after next_turn
+    except Exception as e:
+        logger.exception('SSE: failed to create user message session_id=%s', session_id)
+        return error_response('Message creation failed', status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code='save_error')
+
+    # --- Run FSM (sync, fast — only analysis + state update, NOT reply composition) ---
+    try:
+        tr = next_turn(session, text, provider_override=nlp_provider)
+        um.nlp = tr.nlp_payload or {}
+        um.save()
+    except Exception as e:
+        logger.exception('SSE: next_turn failed session_id=%s', session_id)
+        def _error_generator():
+            yield _sse_event('error', f'Processing failed: {e.__class__.__name__}')
+        response = StreamingHttpResponse(_error_generator(), content_type='text/event-stream; charset=utf-8')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    # --- Stream the reply ---
+    response = StreamingHttpResponse(
+        _stream_reply(session, text, tr, nlp_provider),
+        content_type='text/event-stream; charset=utf-8',
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'  # Disable Nginx proxy buffering
+    return response
+
+

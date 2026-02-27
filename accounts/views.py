@@ -13,13 +13,7 @@ from .auth import get_bearer_token, firebase_init_error, verify_firebase_id_toke
 
 from utils.drf_auth import FirebaseAuthentication, IsFirebaseAuthenticated
 from utils.errors import error_response
-
-try:
-    from scripts.etl.kuccps.grades import normalize_grade as _kcse_normalize_grade  # type: ignore
-    from scripts.etl.kuccps.grades import grade_points as _kcse_grade_points  # type: ignore
-except Exception:
-    _kcse_normalize_grade = None
-    _kcse_grade_points = None
+from utils.grades import grade_points as _kcse_grade_points, normalize_grade as _kcse_normalize_grade
 
 
 _logger = logging.getLogger(__name__)
@@ -157,28 +151,11 @@ def _compute_kcse_cluster_summary(ob: OnboardingProfile) -> dict:
         if not v:
             continue
         norm_grades[k] = v
-        pts = 0
-        if _kcse_grade_points:
-            try:
-                pts = int(_kcse_grade_points(v) or 0)
-            except Exception:
-                pts = 0
-        else:
-            mapping = {
-                'A': 12,
-                'A-': 11,
-                'B+': 10,
-                'B': 9,
-                'B-': 8,
-                'C+': 7,
-                'C': 6,
-                'C-': 5,
-                'D+': 4,
-                'D': 3,
-                'D-': 2,
-                'E': 1,
-            }
-            pts = int(mapping.get(v, 0) or 0)
+        pts = _kcse_grade_points(v) or 0
+        try:
+            pts = int(pts)
+        except Exception:
+            pts = 0
         if pts > 0:
             cand_pts[k] = pts
 
