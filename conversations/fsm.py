@@ -122,6 +122,76 @@ except ImportError:
         return int(c) >= int(m)
 
 
+def compute_eligibility(program: Any, grades_map: Dict[str, str]) -> Dict[str, Any]:
+    try:
+        groups = list(program.requirement_groups.all().order_by('order').prefetch_related('options', 'options__subject'))
+    except Exception:
+        groups = []
+    if not groups:
+        return {'eligible': None, 'missing': [], 'unmet_groups': 0}
+
+    gmap: Dict[str, str] = {}
+    for k, v in (grades_map or {}).items():
+        kk = str(k).strip().upper().replace(' ', '')
+        vv = _norm_grade(v)
+        if not kk or not vv:
+            continue
+        canon = str(_SUBJECT_TOKEN_ALIASES.get(kk) or kk).strip().upper().replace(' ', '')
+        gmap[kk] = vv
+        if canon:
+            gmap[canon] = vv
+            for a in (_SUBJECT_TOKEN_CANON_TO_ALIASES.get(canon) or []):
+                aa = str(a or '').strip().upper().replace(' ', '')
+                if aa:
+                    gmap[aa] = vv
+        if kk in _SUBJECT_CODE_ALIASES:
+            gmap[str(_SUBJECT_CODE_ALIASES.get(kk) or '').strip().upper()] = vv
+        if kk in _SUBJECT_CANON_TO_NUM:
+            gmap[str(_SUBJECT_CANON_TO_NUM.get(kk) or '').strip().upper()] = vv
+        if canon in _SUBJECT_CANON_TO_NUM:
+            gmap[str(_SUBJECT_CANON_TO_NUM.get(canon) or '').strip().upper()] = vv
+
+    missing: List[str] = []
+    unmet_groups = 0
+    for grp in groups:
+        try:
+            pick = int(getattr(grp, 'pick', 1) or 1)
+        except Exception:
+            pick = 1
+        try:
+            opts = list(grp.options.all().order_by('order'))
+        except Exception:
+            opts = []
+        if not opts:
+            continue
+
+        satisfied = 0
+        grp_missing: List[str] = []
+        for opt in opts:
+            subj_code = ''
+            try:
+                if getattr(opt, 'subject_id', None):
+                    subj_code = (opt.subject.code or '').strip().upper()
+            except Exception:
+                subj_code = ''
+            if not subj_code:
+                subj_code = (getattr(opt, 'subject_code', '') or '').strip().upper()
+            if not subj_code:
+                continue
+            min_grade = _norm_grade(getattr(opt, 'min_grade', '') or '')
+            cand = gmap.get(subj_code, '')
+            if cand and (not min_grade or _meets_min_grade(cand, min_grade)):
+                satisfied += 1
+            else:
+                grp_missing.append(f"{subj_code} >= {min_grade}" if min_grade else subj_code)
+
+        if satisfied < pick:
+            unmet_groups += 1
+            missing.extend(grp_missing[: max(1, pick)])
+
+    return {'eligible': unmet_groups == 0, 'missing': missing, 'unmet_groups': unmet_groups}
+
+
 def _seed_profile_from_onboarding(session: Session, prof: Profile) -> None:
     if not session or not prof:
         return
@@ -396,6 +466,18 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
                 goal_text=goal_text,
                 level=level,
             ) or []
+            
+            try:
+                from catalog.models import Program
+                for r in recommendations:
+                    pid = r.get('program_id')
+                    if pid:
+                        prog = Program.objects.filter(id=pid).first()
+                        if prog:
+                            r['eligibility'] = compute_eligibility(prog, prof.grades or {})
+            except Exception as _e:
+                logger.debug('eligibility check failed: %s', _e)
+
         except Exception as _re:
             logger.debug('_gemini_first_turn: recommend_top_k failed: %s', _re)
 
@@ -587,75 +669,6 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         if not reasons:
             reasons.append("Good overall match based on your saved grades/traits.")
         return reasons
-
-    def _eligibility_for_program(program: Any, grades_map: Dict[str, str]) -> Dict[str, Any]:
-        try:
-            groups = list(program.requirement_groups.all().order_by('order').prefetch_related('options', 'options__subject'))
-        except Exception:
-            groups = []
-        if not groups:
-            return {'eligible': None, 'missing': [], 'unmet_groups': 0}
-
-        gmap: Dict[str, str] = {}
-        for k, v in (grades_map or {}).items():
-            kk = str(k).strip().upper().replace(' ', '')
-            vv = _norm_grade(v)
-            if not kk or not vv:
-                continue
-            canon = str(_SUBJECT_TOKEN_ALIASES.get(kk) or kk).strip().upper().replace(' ', '')
-            gmap[kk] = vv
-            if canon:
-                gmap[canon] = vv
-                for a in (_SUBJECT_TOKEN_CANON_TO_ALIASES.get(canon) or []):
-                    aa = str(a or '').strip().upper().replace(' ', '')
-                    if aa:
-                        gmap[aa] = vv
-            if kk in _SUBJECT_CODE_ALIASES:
-                gmap[str(_SUBJECT_CODE_ALIASES.get(kk) or '').strip().upper()] = vv
-            if kk in _SUBJECT_CANON_TO_NUM:
-                gmap[str(_SUBJECT_CANON_TO_NUM.get(kk) or '').strip().upper()] = vv
-            if canon in _SUBJECT_CANON_TO_NUM:
-                gmap[str(_SUBJECT_CANON_TO_NUM.get(canon) or '').strip().upper()] = vv
-
-        missing: List[str] = []
-        unmet_groups = 0
-        for grp in groups:
-            try:
-                pick = int(getattr(grp, 'pick', 1) or 1)
-            except Exception:
-                pick = 1
-            try:
-                opts = list(grp.options.all().order_by('order'))
-            except Exception:
-                opts = []
-            if not opts:
-                continue
-
-            satisfied = 0
-            grp_missing: List[str] = []
-            for opt in opts:
-                subj_code = ''
-                try:
-                    if getattr(opt, 'subject_id', None):
-                        subj_code = (opt.subject.code or '').strip().upper()
-                except Exception:
-                    subj_code = ''
-                if not subj_code:
-                    subj_code = (getattr(opt, 'subject_code', '') or '').strip().upper()
-                if not subj_code:
-                    continue
-                min_grade = _norm_grade(getattr(opt, 'min_grade', '') or '')
-                cand = gmap.get(subj_code, '')
-                if cand and (not min_grade or _meets_min_grade(cand, min_grade)):
-                    satisfied += 1
-                else:
-                    grp_missing.append(f"{subj_code} >= {min_grade}" if min_grade else subj_code)
-
-            if satisfied < pick:
-                unmet_groups += 1
-                missing.extend(grp_missing[: max(1, pick)])
-
-        return {'eligible': unmet_groups == 0, 'missing': missing, 'unmet_groups': unmet_groups}
 
     try:
         threshold = float(getattr(settings, 'NLP_MIN_CONFIDENCE', 0.4) or 0.4)
@@ -1088,7 +1101,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                     checked += 1
                     continue
 
-                elig = _eligibility_for_program(prog, grades_map)
+                elig = compute_eligibility(prog, grades_map)
                 ok = elig.get('eligible')
                 missing = elig.get('missing') or []
                 if ok is True:
