@@ -1174,9 +1174,12 @@ def next_turn(session: Session, user_text: str, provider_override: str = '', str
                 if not isinstance(a, dict):
                     continue
                 pid = a.get('program_id')
+                pcode = (a.get('program_code') or '').strip()
                 nm = (a.get('program_name') or '').strip()
                 inst = (a.get('institution_name') or '').strip()
                 title = f"{nm} — {inst}".strip(' -')
+                if pcode:
+                    title += f" [CODE: {pcode}]"
                 if not title:
                     continue
                 prog = None
@@ -1236,9 +1239,12 @@ def next_turn(session: Session, user_text: str, provider_override: str = '', str
             if not isinstance(r, dict):
                 continue
             pid = r.get('program_id')
+            pcode = (r.get('program_code') or '').strip()
             nm = (r.get('program_name') or '').strip()
             inst = (r.get('institution_name') or '').strip()
             title = f"{nm} — {inst}".strip(' -')
+            if pcode:
+                title += f" [CODE: {pcode}]"
 
             prog = None
             try:
@@ -1312,9 +1318,12 @@ def next_turn(session: Session, user_text: str, provider_override: str = '', str
                 if not isinstance(c, dict):
                     continue
                 pid = c.get('program_id')
+                pcode = (c.get('program_code') or '').strip()
                 nm = (c.get('program_name') or '').strip()
                 inst = (c.get('institution_name') or '').strip()
                 title = f"{nm} — {inst}".strip(' -')
+                if pcode:
+                    title += f" [CODE: {pcode}]"
                 if not title or title.upper() in seen_titles:
                     continue
                 prog = None

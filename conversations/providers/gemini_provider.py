@@ -185,6 +185,7 @@ def gemini_turn_stream(
         "Formatting rules:\n"
         "- Plain text only. No markdown, no asterisks, no bullet dash characters.\n"
         "- Use numbered lists (1. 2. 3.) for multiple items.\n"
+        "- When suggesting a specific program, you MUST append its program code exactly in the format [CODE: <program_code>].\n"
         "- Keep replies concise: 3-6 sentences for explanations, up to 8 items for lists.\n"
     )
 
