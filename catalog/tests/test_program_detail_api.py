@@ -81,7 +81,7 @@ class CatalogProgramDetailApiTests(TestCase):
             metadata={},
         )
 
-        resp = self.client.get(f"/api/catalog/programs/{prog.id}")
+        resp = self.client.get(f"/api/catalog/programs/{prog.id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
 

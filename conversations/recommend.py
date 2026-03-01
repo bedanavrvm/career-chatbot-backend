@@ -470,7 +470,7 @@ def _recommend_top_k_db(grades: Dict[str, str], traits: Dict[str, float], k: int
             stop = {
                 'become', 'becoming', 'want', 'wants', 'would', 'like', 'study', 'studying', 'career', 'goal', 'goals', 'work',
                 'program', 'programs', 'programme', 'programmes', 'course', 'courses', 'recommend', 'recommended', 'recommendations',
-                'what', 'which', 'please', 'tell', 'give', 'show',
+                'what', 'which', 'please', 'tell', 'give', 'show', 'switch', 'change', 'explore', 'interested', 'looking'
             }
             toks2 = [t for t in toks if t not in stop]
 

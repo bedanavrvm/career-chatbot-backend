@@ -386,7 +386,7 @@ def _update_profile_from_analysis(session: Session, analysis: Dict[str, Any], pr
             prof.save()
 
 
-def _gemini_first_turn(session: Session, user_text: str, history_text: str, local_analysis: Dict[str, Any]) -> 'TurnResult':
+def _gemini_first_turn(session: Session, user_text: str, history_text: str, local_analysis: Dict[str, Any], stream: bool = False) -> 'TurnResult':
     """Full conversation turn handled by Gemini, bypassing the FSM dispatcher.
 
     Loads profile context, fetches catalog recommendations ONLY when the user
@@ -417,6 +417,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         'i want to be', 'i want to become', 'i want to study', 'i want to do',
         'i want to pursue', 'i would like to be', 'i would like to study',
         'my goal is', 'my dream is', 'i am interested in becoming',
+        'switch to', 'change to', 'interested in'
     ]
     if any(kw in low for kw in _STRONG_GOAL_MARKERS):
         career_goals = [user_text.strip()] + [g for g in career_goals if g.lower() != low]
@@ -440,7 +441,8 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         'programs near', 'courses near', 'eligible', 'qualify', 'fit me',
         'i want to be', 'i want to study', 'i want to do', 'i want to become',
         'medicine', 'engineering', 'nursing', 'law', 'pharmacy', 'doctor',
-        'dentist', 'architect', 'pilot', 'accountant', 'teacher',
+        'dentist', 'architect', 'architecture', 'pilot', 'accountant', 'teacher',
+        'switch', 'change', 'explore', 'interested in', 'looking for',
     }
     has_rec_intent = any(kw in low for kw in _REC_INTENT_WORDS)
 
@@ -451,7 +453,13 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         has_rec_intent = True
 
     # ── Fetch catalog recommendations (only when needed) ─────────────────────
-    goal_text = ' '.join(career_goals).strip() or (user_text.strip() if has_rec_intent else '')
+    goal_parts = [g for g in career_goals if str(g).strip()]
+    if has_rec_intent:
+        txt = str(user_text or '').strip()
+        if 0 < len(txt) <= 80:
+            goal_parts.append(txt)
+            
+    goal_text = ' '.join(goal_parts).strip()
     level = (prefs.get('education_level') or 'bachelor') if isinstance(prefs, dict) else 'bachelor'
     if level not in ('bachelor', 'diploma', 'masters', 'certificate'):
         level = 'bachelor'
@@ -478,14 +486,17 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
     if not api_key or _gem_turn is None:
         raise RuntimeError('Gemini API key or gemini_turn not available — falling back to FSM')
 
-    reply = _gem_turn(
-        user_text,
-        history_text,
-        profile_context,
-        recommendations,
-        api_key=api_key,
-        model_name=model_name,
-    )
+    if stream:
+        reply = ''
+    else:
+        reply = _gem_turn(
+            user_text,
+            history_text,
+            profile_context,
+            recommendations,
+            api_key=api_key,
+            model_name=model_name,
+        )
 
     # ── Persist updated profile state ─────────────────────────────────────────
     slots = dict(session.slots or {})
@@ -513,6 +524,11 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
     # on every message (e.g. greetings, follow-up questions).
     nlp_payload: Dict[str, Any] = {
         'provider': 'gemini',
+        'gemini_first_turn': True,
+        'gemini_context': {
+            'profile_context': profile_context,
+            'recommendations': recommendations,
+        },
         'grades': local_analysis.get('grades') or {},
         'traits': local_analysis.get('traits') or {},
         'intents': local_analysis.get('intents') or [],
@@ -538,7 +554,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
 
 
 
-def next_turn(session: Session, user_text: str, provider_override: str = '') -> TurnResult:
+def next_turn(session: Session, user_text: str, provider_override: str = '', stream: bool = False) -> TurnResult:
     """Compute the next assistant reply/state from user_text.
 
     When Gemini is the active provider, bypasses the FSM dispatcher entirely
@@ -565,7 +581,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
     # ── Gemini-first path: Gemini owns the full reply ─────────────────────────
     if provider == 'gemini' and _gem_turn is not None:
         try:
-            return _gemini_first_turn(session, user_text, history_text, local_analysis)
+            return _gemini_first_turn(session, user_text, history_text, local_analysis, stream=stream)
         except Exception as _gem_err:
             logger.warning('next_turn: Gemini failed (%s), falling back to local FSM', _gem_err)
             # Fall through to the local FSM path below
@@ -741,6 +757,9 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
         itxt = ", ".join(list(tuse.keys())) or "(none)"
         goals = _get_career_goals()
         level = slots.get('education_level') or prof.preferences.get('education_level') or 'bachelor'
+        if level not in ('bachelor', 'diploma', 'masters', 'certificate'):
+            level = 'bachelor'
+        
         # FIX: was using `goal_text` (undefined variable), now calls _goal_text_for_recommendation()
         resolved_goal_text = _goal_text_for_recommendation()
         recs = recommend_top_k(prof.grades or {}, prof.traits or {}, k=5, goal_text=resolved_goal_text, level=level)
@@ -1167,7 +1186,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                     prog = None
                 if prog is None:
                     continue
-                elig = _eligibility_for_program(prog, grades_map)
+                elig = compute_eligibility(prog, grades_map)
                 if elig.get('eligible') is True:
                     suggested.append(title)
                 if len(suggested) >= 5:
@@ -1231,7 +1250,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                 unknown_titles.append(title)
                 continue
 
-            elig = _eligibility_for_program(prog, grades_map)
+            elig = compute_eligibility(prog, grades_map)
             ok = elig.get('eligible')
             missing = elig.get('missing') or []
             if ok is True:
@@ -1305,7 +1324,7 @@ def next_turn(session: Session, user_text: str, provider_override: str = '') -> 
                     prog = None
                 if prog is None:
                     continue
-                elig = _eligibility_for_program(prog, grades_map)
+                elig = compute_eligibility(prog, grades_map)
                 if elig.get('eligible') is True:
                     suggested.append(title)
                     seen_titles.add(title.upper())

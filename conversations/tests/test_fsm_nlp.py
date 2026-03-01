@@ -183,7 +183,7 @@ class TestFSM(TestCase):
 
         inst = Institution.objects.create(code='MED1', name='MED UNIVERSITY', region='Nairobi', county='Nairobi')
         field_med = Field.objects.create(name='Medicine')
-        Program.objects.create(
+        prog_med = Program.objects.create(
             institution=inst,
             field=field_med,
             code='MED001',
@@ -193,6 +193,9 @@ class TestFSM(TestCase):
             campus='',
             region='Nairobi',
         )
+        subj_bio = Subject.objects.create(code='BIO', name='Biology')
+        g_med = ProgramRequirementGroup.objects.create(program=prog_med, name='Group 1', pick=1, order=0)
+        ProgramRequirementOption.objects.create(group=g_med, subject=subj_bio, subject_code='BIO', min_grade='C', order=0)
 
         field_other = Field.objects.create(name='Education')
         Program.objects.create(

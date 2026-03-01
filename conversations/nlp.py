@@ -270,7 +270,7 @@ def detect_intents(text: str, grades: Dict[str, str]) -> List[str]:
         intents.append('qualify')
     if re.search(r"\bcareer\s+paths?\b", s) or any(k in s for k in ['possible career', 'career options', 'career direction']):
         intents.append('career_paths')
-    if any(w in s for w in ["recommend", "suggest", "results", "options", "program", "programs", "career", "careers", "career path", "paths", "path", "job", "jobs", "profession", "occupations"]):
+    if any(w in s for w in ["recommend", "suggest", "results", "options", "program", "programs", "career", "careers", "career path", "paths", "path", "job", "jobs", "profession", "occupations", "switch", "change", "explore", "interested in", "looking for"]):
         intents.append('recommend')
     if (
         any(k in s for k in [
