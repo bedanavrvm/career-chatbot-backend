@@ -43,6 +43,9 @@ def planner_turn(session, user_text: str, *, uid: str, provider_override: str = 
     if not reply:
         return None
 
+    if isinstance(out, dict) and 'type' in out and isinstance(nlp_payload, dict):
+        nlp_payload['tool_results'] = out
+
     slots = dict(getattr(session, 'slots', None) or {})
     return TurnResult(
         reply=reply,

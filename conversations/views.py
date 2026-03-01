@@ -1048,6 +1048,7 @@ def _stream_reply(session, user_text: str, tr, nlp_provider: str):
                 'program_recommendations': (tr.nlp_payload.get('turn_recommendations') or {}).get('recommendations') or [],
                 'program_titles': tr.nlp_payload.get('program_titles') or [],
                 'institutions': tr.nlp_payload.get('institutions') or [],
+                'tool_results': tr.nlp_payload.get('tool_results') or {},
             }
 
             buffer = []

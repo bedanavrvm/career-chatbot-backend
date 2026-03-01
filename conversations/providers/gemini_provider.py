@@ -104,7 +104,11 @@ def gemini_turn(
         for i, r in enumerate(recommendations[:10], 1):
             nm = (r.get('program_name') or '').strip()
             score = r.get('score')
-            line = f"{i}. {nm}"
+            pcode = (r.get('program_code') or '').strip()
+            if nm and pcode:
+                line = f"{i}. {nm} [CODE: {pcode}]"
+            else:
+                line = f"{i}. {nm}"
             
             institutions = r.get('institutions', [])
             if institutions:
@@ -185,7 +189,7 @@ def gemini_turn_stream(
         "Formatting rules:\n"
         "- Plain text only. No markdown, no asterisks, no bullet dash characters.\n"
         "- Use numbered lists (1. 2. 3.) for multiple items.\n"
-        "- When suggesting a specific program, you MUST append its program code exactly in the format [CODE: <program_code>].\n"
+        "- When suggesting a specific program, you MUST append its program code exactly in the format [CODE: <program_code>]. Example: 'Bachelor of Medicine & Bachelor of Surgery (MBChB) [CODE: 1263131]'.\n"
         "- Keep replies concise: 3-6 sentences for explanations, up to 8 items for lists.\n"
     )
 
@@ -214,7 +218,11 @@ def gemini_turn_stream(
         ctx_parts.append('\n--- CATALOG RECOMMENDATIONS ---')
         for i, r in enumerate(recommendations[:10], 1):
             nm = (r.get('program_name') or '').strip()
-            line = f"{i}. {nm}"
+            pcode = (r.get('program_code') or '').strip()
+            if nm and pcode:
+                line = f"{i}. {nm} [CODE: {pcode}]"
+            else:
+                line = f"{i}. {nm}"
             
             institutions = r.get('institutions', [])
             if institutions:
@@ -423,6 +431,7 @@ def compose_answer(user_text: str, context: Dict[str, Any], *, api_key: str, mod
         "You are a career guidance assistant. You MUST ground responses ONLY on the provided context.\n"
         "Rules:\n"
         "- Do NOT invent universities, programs, or data not present in context.\n"
+        "- If the context includes 'tool_results' (e.g., eligibility criteria, explanations, or program details), you MUST use this information directly to answer the user's specific question.\n"
         "- If asked 'which programs', list specific program titles from 'program_titles' or from 'program_recommendations'.\n"
         "- If asked 'which universities', list items from 'institutions' in context.\n"
         "- Keep answers concise and helpful.\n"
@@ -430,6 +439,7 @@ def compose_answer(user_text: str, context: Dict[str, Any], *, api_key: str, mod
         "Formatting:\n"
         "- Output plain text only (no markdown, no asterisks, no bullet characters).\n"
         "- If listing items, use simple numbered lines like '1. ...', '2. ...'.\n"
+        "- When suggesting a specific program, you MUST append its program_code exactly in the format [CODE: <program_code>]. Example: 'Bachelor of Medicine & Bachelor of Surgery [CODE: 1263131]'.\n"
         "- Avoid long lists: default to 5 items max unless the user asks for more."
     )
     ctx_json = json.dumps(context, ensure_ascii=False)
@@ -517,6 +527,7 @@ def compose_answer_stream(
         "You are a career guidance assistant. You MUST ground responses ONLY on the provided context.\n"
         "Rules:\n"
         "- Do NOT invent universities, programs, or data not present in context.\n"
+        "- If the context includes 'tool_results' (e.g., eligibility criteria, explanations, or program details), you MUST use this information directly to answer the user's specific question.\n"
         "- If asked 'which programs', list specific program titles from 'program_titles' or from 'program_recommendations'.\n"
         "- If asked 'which universities', list items from 'institutions' in context.\n"
         "- Keep answers concise and helpful.\n"
@@ -524,6 +535,7 @@ def compose_answer_stream(
         "Formatting:\n"
         "- Output plain text only (no markdown, no asterisks, no bullet characters).\n"
         "- If listing items, use simple numbered lines like '1. ...', '2. ...'.\n"
+        "- When suggesting a specific program, you MUST append its program_code exactly in the format [CODE: <program_code>]. Example: 'Bachelor of Medicine & Bachelor of Surgery [CODE: 1263131]'.\n"
         "- Avoid long lists: default to 5 items max unless the user asks for more."
     )
 
