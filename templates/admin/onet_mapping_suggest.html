@@ -1,0 +1,51 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Suggest O*NET Field → Occupation Mappings (Preview CSV)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  <p>
+    This generates a <strong>downloadable CSV</strong> of suggested mappings.
+    It does <strong>not</strong> write to the database.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_field_slugs">Field slugs (optional)</label>
+        <input id="id_field_slugs" type="text" name="field_slugs" style="width: 480px;" placeholder="engineering,computing-it" />
+        <p class="help">Comma-separated list. Leave blank to include all Fields.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_top_k_programs">Top K programs per field</label>
+        <input id="id_top_k_programs" type="number" name="top_k_programs" value="{{ top_k_programs }}" min="1" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_max_keywords">Max keywords</label>
+        <input id="id_max_keywords" type="number" name="max_keywords" value="{{ max_keywords }}" min="1" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_top_n_occupations">Top N occupations per field</label>
+        <input id="id_top_n_occupations" type="number" name="top_n_occupations" value="{{ top_n_occupations }}" min="1" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_min_score">Min score</label>
+        <input id="id_min_score" type="number" step="0.1" name="min_score" value="{{ min_score }}" min="0" />
+        <p class="help">Increase to reduce noisy matches.</p>
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Generate CSV" class="default" />
+    </div>
+  </form>
+{% endblock %}

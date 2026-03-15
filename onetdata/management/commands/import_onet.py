@@ -12,6 +12,126 @@ _DEFAULT_SQL_DIR = Path(__file__).resolve().parents[4] / 'onet' / 'db_30_2_mysql
 class Command(BaseCommand):
     help = 'Import O*NET MySQL .sql dump files into the configured database.'
 
+    def _ensure_surrogate_ids_postgres(self, cursor):
+        if getattr(connection, 'vendor', '') != 'postgresql':
+            return
+
+        cursor.execute(
+            """
+DO $$
+BEGIN
+    -- Ensure Django-admin-friendly surrogate PKs for O*NET tables that use composite keys.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'interests'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'interests' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE interests ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'interests' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE interests ADD CONSTRAINT interests_pkey PRIMARY KEY (id);
+        END IF;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'skills'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'skills' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE skills ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'skills' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE skills ADD CONSTRAINT skills_pkey PRIMARY KEY (id);
+        END IF;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'related_occupations'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'related_occupations' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE related_occupations ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'related_occupations' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE related_occupations ADD CONSTRAINT related_occupations_pkey PRIMARY KEY (id);
+        END IF;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'job_zones'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'job_zones' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE job_zones ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'job_zones' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE job_zones ADD CONSTRAINT job_zones_pkey PRIMARY KEY (id);
+        END IF;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'education_training_experience'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'education_training_experience' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE education_training_experience ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'education_training_experience' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE education_training_experience ADD CONSTRAINT education_training_experience_pkey PRIMARY KEY (id);
+        END IF;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'ete_categories'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'ete_categories' AND column_name = 'id'
+        ) THEN
+            ALTER TABLE ete_categories ADD COLUMN id BIGSERIAL;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'ete_categories' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+            ALTER TABLE ete_categories ADD CONSTRAINT ete_categories_pkey_id PRIMARY KEY (id);
+        END IF;
+    END IF;
+END $$;
+"""
+        )
+
     def add_arguments(self, parser):
         parser.add_argument(
             '--sql-dir',
@@ -133,5 +253,8 @@ class Command(BaseCommand):
                             self.stdout.write(f'  executed {n} statements...')
 
                     self.stdout.write(f'  executed {n} statements from {filename}')
+
+                # If the import included these tables, ensure surrogate PKs exist (admin-friendly).
+                self._ensure_surrogate_ids_postgres(cursor)
 
         self.stdout.write(self.style.SUCCESS('O*NET import complete.'))

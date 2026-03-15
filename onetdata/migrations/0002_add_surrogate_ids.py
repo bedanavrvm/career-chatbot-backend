@@ -12,6 +12,13 @@ def _add_surrogate_ids(apps, schema_editor):
         """
 DO $$
 BEGIN
+    -- NOTE: O*NET tables are imported out-of-band (unmanaged models). On a fresh
+    -- database, these tables may not exist yet, so we must guard each block.
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'interests'
+    ) THEN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'interests' AND column_name = 'id'
@@ -24,7 +31,12 @@ BEGIN
     ) THEN
         ALTER TABLE interests ADD CONSTRAINT interests_pkey PRIMARY KEY (id);
     END IF;
+    END IF;
 
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'skills'
+    ) THEN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'skills' AND column_name = 'id'
@@ -37,7 +49,12 @@ BEGIN
     ) THEN
         ALTER TABLE skills ADD CONSTRAINT skills_pkey PRIMARY KEY (id);
     END IF;
+    END IF;
 
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'related_occupations'
+    ) THEN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'related_occupations' AND column_name = 'id'
@@ -49,6 +66,7 @@ BEGIN
         WHERE table_name = 'related_occupations' AND constraint_type = 'PRIMARY KEY'
     ) THEN
         ALTER TABLE related_occupations ADD CONSTRAINT related_occupations_pkey PRIMARY KEY (id);
+    END IF;
     END IF;
 END $$;
 """

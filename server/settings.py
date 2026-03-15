@@ -164,12 +164,10 @@ elif _db_url:
         }
     }
 else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+    raise ImproperlyConfigured(
+        'DATABASE_URL must be set (Postgres is required). '
+        'Example: postgres://postgres:password@127.0.0.1:5432/delphine'
+    )
 
 
 # Password validation

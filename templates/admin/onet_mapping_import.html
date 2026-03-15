@@ -1,0 +1,38 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Import Verified O*NET Field → Occupation Mappings (Write to DB)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if ok %}
+    <p style="color: #468847;"><strong>OK:</strong> {{ ok }}</p>
+  {% endif %}
+
+  <p>
+    Upload a reviewed CSV and import it into the database table used by the careers API.
+  </p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_file">CSV file</label>
+        <input id="id_file" type="file" name="file" accept=".csv,text/csv" required />
+        <p class="help">Required columns: field_slug, occupation_code. Optional: weight, notes.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_replace_existing">Replace existing mappings for those fields</label>
+        <input id="id_replace_existing" type="checkbox" name="replace_existing" {% if replace_existing %}checked{% endif %} />
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Import CSV" class="default" />
+    </div>
+  </form>
+{% endblock %}

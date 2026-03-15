@@ -16,11 +16,6 @@
 <div style="color:#666">No status available yet.</div>
 {% endif %}
 
-{% if job_running %}
-<script>
-  setTimeout(function () { window.location.reload(); }, 5000);
-</script>
-{% endif %}
 {% if error %}
 <div style="color:#a00">Error: {{ error }}</div>
 {% endif %}

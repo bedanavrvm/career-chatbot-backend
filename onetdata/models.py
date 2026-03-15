@@ -93,3 +93,61 @@ class OnetRelatedOccupation(models.Model):
         db_table = 'related_occupations'
         managed = False
         unique_together = (('onetsoc_code', 'related_onetsoc_code', 'relatedness_tier', 'related_index'),)
+
+
+class OnetJobZoneReference(models.Model):
+    job_zone = models.DecimalField(max_digits=1, decimal_places=0, primary_key=True)
+    name = models.CharField(max_length=60)
+    experience = models.CharField(max_length=500)
+    education = models.CharField(max_length=500)
+    job_training = models.CharField(max_length=500)
+    examples = models.CharField(max_length=500)
+    svp_range = models.CharField(max_length=25)
+
+    class Meta:
+        db_table = 'job_zone_reference'
+        managed = False
+
+
+class OnetJobZone(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='onetsoc_code')
+    job_zone = models.ForeignKey(OnetJobZoneReference, on_delete=models.PROTECT, db_column='job_zone')
+    date_updated = models.DateField()
+    domain_source = models.CharField(max_length=30)
+
+    class Meta:
+        db_table = 'job_zones'
+        managed = False
+
+
+class OnetEteCategory(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    element_id = models.ForeignKey(OnetContentElement, on_delete=models.PROTECT, db_column='element_id')
+    scale_id = models.ForeignKey(OnetScale, on_delete=models.PROTECT, db_column='scale_id')
+    category = models.DecimalField(max_digits=3, decimal_places=0)
+    category_description = models.CharField(max_length=1000)
+
+    class Meta:
+        db_table = 'ete_categories'
+        managed = False
+
+
+class OnetEducationTrainingExperience(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='onetsoc_code')
+    element_id = models.ForeignKey(OnetContentElement, on_delete=models.PROTECT, db_column='element_id')
+    scale_id = models.ForeignKey(OnetScale, on_delete=models.PROTECT, db_column='scale_id')
+    category = models.DecimalField(max_digits=3, decimal_places=0, null=True, blank=True)
+    data_value = models.DecimalField(max_digits=5, decimal_places=2)
+    n = models.DecimalField(max_digits=4, decimal_places=0, null=True, blank=True)
+    standard_error = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True)
+    lower_ci_bound = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True)
+    upper_ci_bound = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True)
+    recommend_suppress = models.CharField(max_length=1, null=True, blank=True)
+    date_updated = models.DateField()
+    domain_source = models.CharField(max_length=30)
+
+    class Meta:
+        db_table = 'education_training_experience'
+        managed = False

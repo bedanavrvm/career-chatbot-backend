@@ -2,6 +2,10 @@ from django.contrib import admin
 
 from .models import (
     OnetContentElement,
+    OnetEducationTrainingExperience,
+    OnetEteCategory,
+    OnetJobZone,
+    OnetJobZoneReference,
     OnetInterest,
     OnetOccupation,
     OnetRelatedOccupation,
@@ -54,3 +58,30 @@ class OnetTaskStatementAdmin(admin.ModelAdmin):
 class OnetRelatedOccupationAdmin(admin.ModelAdmin):
     search_fields = ('onetsoc_code__onetsoc_code', 'related_onetsoc_code__onetsoc_code', 'relatedness_tier')
     list_display = ('onetsoc_code', 'related_onetsoc_code', 'relatedness_tier', 'related_index')
+
+
+@admin.register(OnetJobZoneReference)
+class OnetJobZoneReferenceAdmin(admin.ModelAdmin):
+    search_fields = ('job_zone', 'name')
+    list_display = ('job_zone', 'name', 'svp_range')
+
+
+@admin.register(OnetJobZone)
+class OnetJobZoneAdmin(admin.ModelAdmin):
+    search_fields = ('onetsoc_code__onetsoc_code',)
+    list_display = ('onetsoc_code', 'job_zone', 'date_updated', 'domain_source')
+    list_filter = ('job_zone',)
+
+
+@admin.register(OnetEteCategory)
+class OnetEteCategoryAdmin(admin.ModelAdmin):
+    search_fields = ('element_id__element_id', 'scale_id__scale_id')
+    list_display = ('element_id', 'scale_id', 'category')
+    list_filter = ('element_id', 'scale_id')
+
+
+@admin.register(OnetEducationTrainingExperience)
+class OnetEducationTrainingExperienceAdmin(admin.ModelAdmin):
+    search_fields = ('onetsoc_code__onetsoc_code', 'element_id__element_id', 'scale_id__scale_id')
+    list_display = ('onetsoc_code', 'element_id', 'scale_id', 'category', 'data_value', 'date_updated')
+    list_filter = ('element_id', 'scale_id')
