@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'catalog',
     'accounts',
     'conversations',
+    'onetdata',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
