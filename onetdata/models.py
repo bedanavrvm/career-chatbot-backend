@@ -33,6 +33,7 @@ class OnetScale(models.Model):
 
 
 class OnetInterest(models.Model):
+    id = models.BigAutoField(primary_key=True)
     onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='onetsoc_code')
     element_id = models.ForeignKey(OnetContentElement, on_delete=models.PROTECT, db_column='element_id')
     scale_id = models.ForeignKey(OnetScale, on_delete=models.PROTECT, db_column='scale_id')
@@ -47,6 +48,7 @@ class OnetInterest(models.Model):
 
 
 class OnetSkill(models.Model):
+    id = models.BigAutoField(primary_key=True)
     onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='onetsoc_code')
     element_id = models.ForeignKey(OnetContentElement, on_delete=models.PROTECT, db_column='element_id')
     scale_id = models.ForeignKey(OnetScale, on_delete=models.PROTECT, db_column='scale_id')
@@ -81,6 +83,7 @@ class OnetTaskStatement(models.Model):
 
 
 class OnetRelatedOccupation(models.Model):
+    id = models.BigAutoField(primary_key=True)
     onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='onetsoc_code', related_name='related_from')
     related_onetsoc_code = models.ForeignKey(OnetOccupation, on_delete=models.CASCADE, db_column='related_onetsoc_code', related_name='related_to')
     relatedness_tier = models.CharField(max_length=50)
