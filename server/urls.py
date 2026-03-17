@@ -32,8 +32,15 @@ from etl.api import api_institutions as etl_api_institutions
 from etl.api import api_programs as etl_api_programs
 from etl.api import api_search as etl_api_search
 from onetdata.admin_views import admin_onet_import as onet_admin_import
+from onetdata.admin_views import admin_onet_dashboard as onet_admin_dashboard
+from onetdata.admin_views import admin_onet_dq_coverage as onet_admin_dq_coverage
+from onetdata.admin_views import admin_onet_mapping_coverage as onet_admin_mapping_coverage
 from onetdata.admin_views import admin_onet_mapping_import as onet_admin_mapping_import
+from onetdata.admin_views import admin_onet_mapping_manual as onet_admin_mapping_manual
 from onetdata.admin_views import admin_onet_mapping_suggest as onet_admin_mapping_suggest
+from onetdata.admin_views import admin_onet_snapshot_import as onet_admin_snapshot_import
+from onetdata.admin_views import admin_onet_snapshot_generate as onet_admin_snapshot_generate
+from onetdata.admin_views import admin_program_field_review as onet_admin_program_field_review
 from onetdata.api import api_onet_occupation_detail as onet_api_occupation_detail
 from onetdata.api import api_onet_occupations as onet_api_occupations
 from onetdata.api import api_onet_recommendations as onet_api_recommendations
@@ -61,9 +68,16 @@ urlpatterns = [
     path('api/catalog/institutions/<str:institution_code>', catalog_api_institution_detail, name='api_catalog_institution_detail'),
     path('admin/etl/upload', etl_admin_etl_upload, name='admin_etl_upload'),
     path('admin/etl/process', etl_admin_etl_process, name='admin_etl_process'),
+    path('admin/onet', onet_admin_dashboard, name='admin_onet_dashboard'),
     path('admin/onet/import', onet_admin_import, name='admin_onet_import'),
+    path('admin/onet/dq/coverage', onet_admin_dq_coverage, name='admin_onet_dq_coverage'),
+    path('admin/onet/snapshot/import', onet_admin_snapshot_import, name='admin_onet_snapshot_import'),
+    path('admin/onet/snapshot/generate', onet_admin_snapshot_generate, name='admin_onet_snapshot_generate'),
     path('admin/onet/mappings/suggest', onet_admin_mapping_suggest, name='admin_onet_mapping_suggest'),
     path('admin/onet/mappings/import', onet_admin_mapping_import, name='admin_onet_mapping_import'),
+    path('admin/onet/mappings/manual', onet_admin_mapping_manual, name='admin_onet_mapping_manual'),
+    path('admin/onet/mappings/coverage', onet_admin_mapping_coverage, name='admin_onet_mapping_coverage'),
+    path('admin/onet/review/program-fields', onet_admin_program_field_review, name='admin_onet_program_field_review'),
     path('api/onet/occupations', onet_api_occupations, name='api_onet_occupations'),
     path('api/onet/occupations/<str:soc_code>', onet_api_occupation_detail, name='api_onet_occupation_detail'),
     path('api/onet/recommendations', onet_api_recommendations, name='api_onet_recommendations'),

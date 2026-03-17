@@ -1,0 +1,175 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Manual Field → O*NET Mapping Builder (Write to DB)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if ok %}
+    <p style="color: #468847;"><strong>OK:</strong> {{ ok }}</p>
+  {% endif %}
+
+  <p>
+    Use this page when suggestions are empty.
+    Pick a Field, browse/filter O*NET occupations, select occupations, and save mappings.
+  </p>
+
+  <form method="get" style="margin-bottom: 12px;">
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_field_slug">Field</label>
+        <select id="id_field_slug" name="field_slug" style="min-width: 380px;">
+          <option value="">-- select field --</option>
+          {% for f in fields %}
+            <option value="{{ f.slug }}" {% if field_slug == f.slug %}selected{% endif %}>{{ f.name }} ({{ f.slug }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="id_q">Occupation search</label>
+        <input id="id_q" type="text" name="q" value="{{ q }}" style="width: 480px;" placeholder="lawyer, economist, dentist, pharmacist..." />
+        <p class="help">Searches occupation titles. Source: {{ occ_source }}.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_keywords">Contains keywords</label>
+        <input id="id_keywords" type="text" name="keywords" value="{{ keywords }}" style="width: 480px;" placeholder="comma or space separated" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_source">Source</label>
+        <select id="id_source" name="source">
+          <option value="auto" {% if source == 'auto' %}selected{% endif %}>Auto (prefer snapshot)</option>
+          <option value="snapshot" {% if source == 'snapshot' %}selected{% endif %}>Snapshot only</option>
+          <option value="onet" {% if source == 'onet' %}selected{% endif %}>Full O*NET tables only</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="id_job_zone">Job Zone</label>
+        <select id="id_job_zone" name="job_zone">
+          <option value="" {% if not job_zone %}selected{% endif %}>Any</option>
+          <option value="1" {% if job_zone == 1 %}selected{% endif %}>1</option>
+          <option value="2" {% if job_zone == 2 %}selected{% endif %}>2</option>
+          <option value="3" {% if job_zone == 3 %}selected{% endif %}>3</option>
+          <option value="4" {% if job_zone == 4 %}selected{% endif %}>4</option>
+          <option value="5" {% if job_zone == 5 %}selected{% endif %}>5</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="id_offset">Offset</label>
+        <input id="id_offset" type="number" name="offset" value="{{ offset }}" min="0" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_limit">Limit</label>
+        <input id="id_limit" type="number" name="limit" value="{{ limit }}" min="1" max="200" />
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Search" class="default" />
+    </div>
+  </form>
+
+  {% if field_slug %}
+    <p>Selected Field: <strong>{{ field_name }}</strong> (<code>{{ field_slug }}</code>)</p>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="field_slug" value="{{ field_slug }}" />
+    <input type="hidden" name="q" value="{{ q }}" />
+    <input type="hidden" name="keywords" value="{{ keywords }}" />
+    <input type="hidden" name="source" value="{{ source }}" />
+    <input type="hidden" name="job_zone" value="{{ job_zone }}" />
+    <input type="hidden" name="offset" value="{{ offset }}" />
+    <input type="hidden" name="limit" value="{{ limit }}" />
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_replace_existing">Replace existing mappings for this Field</label>
+        <input id="id_replace_existing" type="checkbox" name="replace_existing" {% if replace_existing %}checked{% endif %} />
+      </div>
+
+      <div class="form-row">
+        <label for="id_weight">Weight (optional)</label>
+        <input id="id_weight" type="number" name="weight" step="0.001" value="{{ weight }}" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_notes">Notes (optional)</label>
+        <input id="id_notes" type="text" name="notes" value="{{ notes }}" style="width: 480px;" />
+      </div>
+    </fieldset>
+
+    <h3>Search results</h3>
+    {% if occupations %}
+      <p style="color:#666; margin-top: 4px;">
+        Showing {{ occupations|length }} results (offset={{ offset }}, limit={{ limit }}). Source: <strong>{{ occ_source }}</strong>.
+      </p>
+
+      <p style="margin-top: 6px;">
+        {% if offset|add:"0" > 0 %}
+          <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&job_zone={{ job_zone }}&offset={{ prev_offset }}&limit={{ limit }}">Prev</a>
+          |
+        {% endif %}
+        <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&job_zone={{ job_zone }}&offset={{ next_offset }}&limit={{ limit }}">Next</a>
+      </p>
+
+      <table class="adminlist" style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Select</th>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">SOC</th>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Title</th>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Already mapped?</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for o in occupations %}
+            <tr>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">
+                {% if o.onetsoc_code in existing_codes %}
+                  <input type="checkbox" disabled />
+                {% else %}
+                  <input type="checkbox" name="occupation_code" value="{{ o.onetsoc_code }}" />
+                {% endif %}
+              </td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ o.onetsoc_code }}</code></td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ o.title }}</td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">
+                {% if o.onetsoc_code in existing_codes %}
+                  <span style="color:#468847;">yes</span>
+                {% else %}
+                  <span style="color:#999;">no</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="submit-row" style="margin-top: 12px;">
+        <input type="submit" value="Save Selected Mappings" class="default" />
+      </div>
+    {% else %}
+      <p style="color:#666;">No occupations found. Try a different search term.</p>
+    {% endif %}
+  </form>
+
+  <p style="margin-top: 16px;">
+    Useful links:
+    <a href="/admin/onet">O*NET dashboard</a>
+    |
+    <a href="/admin/onet/mappings/coverage">Coverage dashboard</a>
+    |
+    <a href="/admin/onet/dq/coverage">DQ coverage</a>
+  </p>
+
+  <p style="margin-top: 16px;"><a href="/admin/">Back to Admin</a></p>
+{% endblock %}

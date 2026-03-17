@@ -11,6 +11,17 @@ class OnetOccupation(models.Model):
         managed = False
 
 
+class OnetOccupationSnapshot(models.Model):
+    onetsoc_code = models.CharField(max_length=10, primary_key=True)
+    title = models.CharField(max_length=150)
+    description = models.TextField(blank=True)
+    job_zone = models.PositiveSmallIntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onet_occupation_snapshot'
+
+
 class OnetContentElement(models.Model):
     element_id = models.CharField(max_length=20, primary_key=True)
     element_name = models.CharField(max_length=150)

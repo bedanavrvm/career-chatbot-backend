@@ -47,6 +47,26 @@ def _job_zone_by_code(codes: list[str]) -> dict[str, int]:
         return {}
 
 
+def _snapshot_by_code(codes: list[str]) -> dict[str, dict]:
+    try:
+        from onetdata.models import OnetOccupationSnapshot  # type: ignore
+    except Exception:
+        OnetOccupationSnapshot = None  # type: ignore
+
+    if not codes or OnetOccupationSnapshot is None:
+        return {}
+
+    try:
+        rows = (
+            OnetOccupationSnapshot.objects
+            .filter(onetsoc_code__in=codes)
+            .values('onetsoc_code', 'title', 'description', 'job_zone')
+        )
+        return {r['onetsoc_code']: r for r in list(rows)}
+    except Exception:
+        return {}
+
+
 def _as_bool(v: object, default: bool = False) -> bool:
     if v is None:
         return bool(default)
@@ -137,8 +157,10 @@ def _api_program_careers_impl(request, program_id: str, force_career_path: bool 
         except Exception:
             pass
     codes = [m.occupation_code for m in mappings]
-    occs = {o.onetsoc_code: o for o in OnetOccupation.objects.filter(onetsoc_code__in=codes)}
-    job_zone_by_code = _job_zone_by_code(codes)
+    snapshots = _snapshot_by_code(codes)
+    missing_codes = [c for c in codes if c and str(c) not in snapshots]
+    occs = {o.onetsoc_code: o for o in OnetOccupation.objects.filter(onetsoc_code__in=missing_codes)} if missing_codes else {}
+    job_zone_by_code = _job_zone_by_code(missing_codes) if missing_codes else {}
     # Automated behavior: career_path grouping enabled by default.
     # Opt-out with career_path=0.
     career_path = force_career_path if force_career_path is not None else _as_bool(request.query_params.get('career_path'), default=True)
@@ -147,7 +169,29 @@ def _api_program_careers_impl(request, program_id: str, force_career_path: bool 
 
     results = []
     for m in mappings:
-        occ = occs.get(m.occupation_code)
+        code = str(m.occupation_code or '').strip()
+        if not code:
+            continue
+
+        snap = snapshots.get(code)
+        if snap:
+            jz = snap.get('job_zone')
+            try:
+                jz_i = int(jz) if jz is not None else None
+            except Exception:
+                jz_i = None
+            results.append({
+                'onetsoc_code': code,
+                'title': snap.get('title') or '',
+                'description': snap.get('description') or '',
+                'weight': float(m.weight) if m.weight is not None else None,
+                'notes': m.notes,
+                'job_zone': jz_i,
+                'level': _level_from_job_zone(jz_i),
+            })
+            continue
+
+        occ = occs.get(code)
         if not occ:
             continue
         jz = job_zone_by_code.get(occ.onetsoc_code)

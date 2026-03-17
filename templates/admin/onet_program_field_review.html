@@ -1,0 +1,87 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Program → Field Review (Assign Field to Programs Missing One)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if ok %}
+    <p style="color: #468847;"><strong>OK:</strong> {{ ok }}</p>
+  {% endif %}
+
+  <p>
+    This page helps you quickly fix programs that have <code>field = NULL</code>.
+    Select programs, choose a Field, and apply.
+  </p>
+
+  <form method="get" style="margin-bottom: 12px;">
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_q">Search (optional)</label>
+        <input id="id_q" type="text" name="q" value="{{ q }}" style="width: 420px;" placeholder="medicine, law, engineering..." />
+        <p class="help">Filters by program normalized name.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_limit">Limit</label>
+        <input id="id_limit" type="number" name="limit" value="{{ limit }}" min="1" max="500" />
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Filter" />
+    </div>
+  </form>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_field_id">Assign Field</label>
+        <select id="id_field_id" name="field_id" required>
+          <option value="">-- select field --</option>
+          {% for f in fields %}
+            <option value="{{ f.id }}">{{ f.name }} ({{ f.slug }})</option>
+          {% endfor %}
+        </select>
+      </div>
+    </fieldset>
+
+    <h3>Programs missing Field (showing up to {{ limit }})</h3>
+    {% if programs %}
+      <table class="adminlist" style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Select</th>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Program</th>
+            <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Level</th>
+            <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Program ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in programs %}
+            <tr>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">
+                <input type="checkbox" name="program_id" value="{{ p.id }}" />
+              </td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.normalized_name }}</td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.level }}</code></td>
+              <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ p.id }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="submit-row" style="margin-top: 12px;">
+        <input type="submit" value="Apply Field to Selected Programs" class="default" />
+      </div>
+    {% else %}
+      <p style="color:#666;">No programs found with missing Field.</p>
+    {% endif %}
+  </form>
+
+  <p style="margin-top: 16px;"><a href="/admin/">Back to Admin</a></p>
+{% endblock %}

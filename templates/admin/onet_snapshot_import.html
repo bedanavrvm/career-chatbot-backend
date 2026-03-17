@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Import O*NET Occupation Snapshot (Write to DB)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if ok %}
+    <p style="color: #468847;"><strong>OK:</strong> {{ ok }}</p>
+  {% endif %}
+
+  {% if existing_count != None %}
+    <p>Current snapshot rows in DB: <strong>{{ existing_count }}</strong></p>
+  {% endif %}
+
+  <p>
+    Upload the exported snapshot CSV and import it into the Render-friendly snapshot table.
+  </p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_file">CSV file</label>
+        <input id="id_file" type="file" name="file" accept=".csv,text/csv" required />
+        <p class="help">Required columns: onetsoc_code, title, description, job_zone.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_truncate">Truncate existing snapshot rows first</label>
+        <input id="id_truncate" type="checkbox" name="truncate" {% if truncate %}checked{% endif %} />
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Import Snapshot CSV" class="default" />
+    </div>
+  </form>
+{% endblock %}

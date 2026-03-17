@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>O*NET Admin Dashboard</h1>
+
+  <h3>Status</h3>
+  <ul>
+    <li>Snapshot rows: <strong>{% if snapshot_count != None %}{{ snapshot_count }}{% else %}n/a{% endif %}</strong></li>
+    <li>Occupation rows (full O*NET): <strong>{% if occupation_count != None %}{{ occupation_count }}{% else %}n/a{% endif %}</strong></li>
+    <li>Core tables loaded: <strong>{% if core_tables_present %}yes{% else %}no{% endif %}</strong></li>
+    <li>Full tables loaded: <strong>{% if full_tables_present %}yes{% else %}no{% endif %}</strong></li>
+    <li>Import job status: <strong>{{ job_status }}</strong>{% if job_pid %} (pid={{ job_pid }}){% endif %}</li>
+  </ul>
+
+  {% if job_log_tail %}
+    <h3>Import log (tail)</h3>
+    <pre style="white-space: pre-wrap; background:#111; color:#eee; padding:10px; border-radius:4px;">{{ job_log_tail }}</pre>
+  {% endif %}
+
+  <h3>Workflows</h3>
+  <ul>
+    <li><a href="/admin/onet/import">Import O*NET tables (core/all)</a></li>
+    <li><a href="/admin/onet/snapshot/import">Import snapshot CSV</a></li>
+    <li><a href="/admin/onet/snapshot/generate">Generate snapshot from full O*NET</a></li>
+  </ul>
+
+  <h3>Mappings</h3>
+  <ul>
+    <li><a href="/admin/onet/mappings/suggest">Generate mapping suggestions (CSV)</a></li>
+    <li><a href="/admin/onet/mappings/import">Import verified mappings (CSV → DB)</a></li>
+    <li><a href="/admin/onet/mappings/manual">Manual mapping builder (browse/filter occupations)</a></li>
+    <li><a href="/admin/onet/mappings/coverage">Coverage dashboard</a></li>
+  </ul>
+
+  <h3>Data Quality / Review</h3>
+  <ul>
+    <li><a href="/admin/onet/dq/coverage">DQ coverage checks</a></li>
+    <li><a href="/admin/onet/review/program-fields">Program → Field review (bulk assign)</a></li>
+  </ul>
+
+  <p style="margin-top: 16px;"><a href="/admin/">Back to Admin</a></p>
+{% endblock %}

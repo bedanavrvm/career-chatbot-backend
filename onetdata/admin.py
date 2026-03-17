@@ -8,6 +8,7 @@ from .models import (
     OnetJobZoneReference,
     OnetInterest,
     OnetOccupation,
+    OnetOccupationSnapshot,
     OnetRelatedOccupation,
     OnetScale,
     OnetSkill,
@@ -22,6 +23,13 @@ from . import mapping_admin  # noqa: F401
 class OnetOccupationAdmin(admin.ModelAdmin):
     search_fields = ('onetsoc_code', 'title')
     list_display = ('onetsoc_code', 'title')
+
+
+@admin.register(OnetOccupationSnapshot)
+class OnetOccupationSnapshotAdmin(admin.ModelAdmin):
+    search_fields = ('onetsoc_code', 'title')
+    list_display = ('onetsoc_code', 'title', 'job_zone', 'updated_at')
+    list_filter = ('job_zone',)
 
 
 @admin.register(OnetContentElement)

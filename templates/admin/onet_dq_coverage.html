@@ -1,0 +1,115 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>O*NET Coverage DQ (Pass/Fail Gate)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if passed != None %}
+    {% if passed %}
+      <p style="color: #468847;"><strong>PASSED</strong> (all checks within thresholds)</p>
+    {% else %}
+      <p style="color: #b94a48;"><strong>FAILED</strong> checks: {{ failed|join:", " }}</p>
+    {% endif %}
+  {% endif %}
+
+  <h3>Thresholds</h3>
+  <form method="post">
+    {% csrf_token %}
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_max_programs_no_field">Max programs with no Field</label>
+        <input id="id_max_programs_no_field" type="number" name="max_programs_no_field" value="{{ thresholds.max_programs_no_field }}" min="0" />
+      </div>
+      <div class="form-row">
+        <label for="id_max_programs_in_unmapped_fields">Max programs in unmapped Fields</label>
+        <input id="id_max_programs_in_unmapped_fields" type="number" name="max_programs_in_unmapped_fields" value="{{ thresholds.max_programs_in_unmapped_fields }}" min="0" />
+      </div>
+      <div class="form-row">
+        <label for="id_max_unmapped_fields_with_programs">Max unmapped Fields with programs</label>
+        <input id="id_max_unmapped_fields_with_programs" type="number" name="max_unmapped_fields_with_programs" value="{{ thresholds.max_unmapped_fields_with_programs }}" min="0" />
+      </div>
+
+      <div class="form-row">
+        <label for="id_detail_limit">Detail rows to show</label>
+        <input id="id_detail_limit" type="number" name="detail_limit" value="{{ detail_limit }}" min="1" max="500" />
+        <p class="help">Controls how many failing Fields/Programs are listed below.</p>
+      </div>
+    </fieldset>
+    <div class="submit-row">
+      <input type="submit" value="Run DQ Checks" class="default" />
+    </div>
+  </form>
+
+  <h3>Current counts</h3>
+  <ul>
+    <li>Total Fields: <strong>{{ total_fields }}</strong></li>
+    <li>Mapped Fields: <strong>{{ mapped_fields }}</strong></li>
+    <li>Unmapped Fields: <strong>{{ unmapped_fields }}</strong></li>
+    <li>Total Programs: <strong>{{ total_programs }}</strong></li>
+    <li>Programs with no Field: <strong>{{ programs_no_field }}</strong></li>
+    <li>Programs in unmapped Fields: <strong>{{ programs_in_unmapped_fields }}</strong></li>
+    <li>Unmapped Fields with programs: <strong>{{ unmapped_fields_with_programs }}</strong></li>
+  </ul>
+
+  <h3>Which Fields are unmapped (top {{ detail_limit }})</h3>
+  {% if unmapped_field_rows %}
+    <table class="adminlist" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Slug</th>
+          <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Programs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in unmapped_field_rows %}
+          <tr>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ f.name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ f.slug }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ f.program_count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;">No unmapped fields found.</p>
+  {% endif %}
+
+  <h3>Sample Programs in unmapped Fields (top {{ detail_limit }})</h3>
+  {% if program_rows %}
+    <table class="adminlist" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Program</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field slug</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Level</th>
+          <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Program ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in program_rows %}
+          <tr>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.normalized_name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.field__name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.field__slug }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.level }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ p.id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;">No programs found in unmapped fields.</p>
+  {% endif %}
+
+  <p style="margin-top: 10px;">
+    Useful links:
+    <a href="/admin/onet/mappings/coverage">Mapping coverage dashboard</a>
+  </p>
+
+  <p style="margin-top: 16px;"><a href="/admin/">Back to Admin</a></p>
+{% endblock %}

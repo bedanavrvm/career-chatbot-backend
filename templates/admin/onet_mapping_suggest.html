@@ -42,6 +42,12 @@
         <input id="id_min_score" type="number" step="0.1" name="min_score" value="{{ min_score }}" min="0" />
         <p class="help">Increase to reduce noisy matches.</p>
       </div>
+
+      <div class="form-row">
+        <label for="id_lenient">Lenient mode</label>
+        <input id="id_lenient" type="checkbox" name="lenient" {% if lenient %}checked{% endif %} />
+        <p class="help">If enabled, fields with no results above Min score will still output top matches.</p>
+      </div>
     </fieldset>
 
     <div class="submit-row">

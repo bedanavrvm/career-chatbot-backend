@@ -1,0 +1,99 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>O*NET Mapping Coverage</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if total_fields != None %}
+    <h3>Summary</h3>
+    <ul>
+      <li>Total Fields: <strong>{{ total_fields }}</strong></li>
+      <li>Fields mapped to O*NET: <strong>{{ mapped_fields }}</strong></li>
+      <li>Fields NOT mapped: <strong>{{ unmapped_fields }}</strong></li>
+      <li>Total Programs: <strong>{{ total_programs }}</strong></li>
+      <li>Programs with no Field: <strong>{{ programs_no_field }}</strong></li>
+      <li>Programs in unmapped Fields: <strong>{{ programs_field_unmapped }}</strong></li>
+    </ul>
+  {% endif %}
+
+  <h3>Unmapped Fields (showing up to {{ limit }})</h3>
+  {% if unmapped_rows %}
+    <table class="adminlist" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Slug</th>
+          <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Programs in Field</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in unmapped_rows %}
+          <tr>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ r.name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ r.slug }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ r.program_count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;">No unmapped fields found.</p>
+  {% endif %}
+
+  <h3>Programs with no Field (showing up to {{ program_limit }})</h3>
+  {% if programs_no_field_rows %}
+    <table class="adminlist" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Program</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Level</th>
+          <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Program ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in programs_no_field_rows %}
+          <tr>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.normalized_name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.level }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ p.id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;">No programs missing a Field.</p>
+  {% endif %}
+
+  <h3>Programs in unmapped Fields (showing up to {{ program_limit }})</h3>
+  {% if programs_field_unmapped_rows %}
+    <table class="adminlist" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Program</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Field slug</th>
+          <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Level</th>
+          <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Program ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in programs_field_unmapped_rows %}
+          <tr>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.normalized_name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ p.field__name }}</td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.field__slug }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ p.level }}</code></td>
+            <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;">{{ p.id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;">No programs found in unmapped Fields.</p>
+  {% endif %}
+
+  <p style="margin-top: 16px;"><a href="/admin/">Back to Admin</a></p>
+{% endblock %}

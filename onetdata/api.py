@@ -13,6 +13,7 @@ from .models import (
     OnetContentElement,
     OnetInterest,
     OnetOccupation,
+    OnetOccupationSnapshot,
     OnetRelatedOccupation,
     OnetSkill,
     OnetTaskStatement,
@@ -46,6 +47,19 @@ def api_onet_occupations(request):
     page = max(1, int(request.GET.get('page', 1) or 1))
     page_size = max(1, min(50, int(request.GET.get('page_size', 20) or 20)))
 
+    try:
+        snap_qs = OnetOccupationSnapshot.objects.all()
+        if q:
+            snap_qs = snap_qs.filter(Q(title__icontains=q) | Q(onetsoc_code__icontains=q))
+        total = int(snap_qs.count())
+        if total > 0:
+            start = (page - 1) * page_size
+            end = start + page_size
+            rows = list(snap_qs.order_by('title')[start:end].values('onetsoc_code', 'title', 'description', 'job_zone'))
+            return Response({'count': total, 'page': page, 'page_size': page_size, 'results': rows})
+    except Exception:
+        pass
+
     qs = OnetOccupation.objects.all()
     if q:
         qs = qs.filter(Q(title__icontains=q) | Q(onetsoc_code__icontains=q))
@@ -68,24 +82,33 @@ def api_onet_occupation_detail(request, soc_code: str):
     if not soc:
         return error_response('soc_code is required', status_code=status.HTTP_400_BAD_REQUEST, code='validation_error')
 
+    occ_snap = None
+    try:
+        occ_snap = OnetOccupationSnapshot.objects.filter(onetsoc_code__iexact=soc).values('onetsoc_code', 'title', 'description', 'job_zone').first()
+    except Exception:
+        occ_snap = None
+
     occ = OnetOccupation.objects.filter(onetsoc_code__iexact=soc).first()
-    if not occ:
+    if not occ and not occ_snap:
         return error_response('Occupation not found', status_code=status.HTTP_404_NOT_FOUND, code='not_found')
 
-    # Tasks
-    tasks = list(
-        OnetTaskStatement.objects.filter(onetsoc_code=occ)
-        .order_by('task_type', 'task_id')
-        .values('task_id', 'task', 'task_type')[:50]
-    )
+    tasks = []
+    if occ:
+        tasks = list(
+            OnetTaskStatement.objects.filter(onetsoc_code=occ)
+            .order_by('task_type', 'task_id')
+            .values('task_id', 'task', 'task_type')[:50]
+        )
 
     # Skills (top 20 by importance IM)
-    skill_rows = (
-        OnetSkill.objects.filter(onetsoc_code=occ, scale_id_id='IM')
-        .select_related('element_id')
-        .order_by('-data_value')
-        .values('element_id_id', 'element_id__element_name', 'data_value')[:20]
-    )
+    skill_rows = []
+    if occ:
+        skill_rows = (
+            OnetSkill.objects.filter(onetsoc_code=occ, scale_id_id='IM')
+            .select_related('element_id')
+            .order_by('-data_value')
+            .values('element_id_id', 'element_id__element_name', 'data_value')[:20]
+        )
     skills = [
         {
             'element_id': r['element_id_id'],
@@ -96,10 +119,12 @@ def api_onet_occupation_detail(request, soc_code: str):
     ]
 
     # Interests (RIASEC)
-    interests_qs = (
-        OnetInterest.objects.filter(onetsoc_code=occ, scale_id_id='OI', element_id_id__in=set(_RIASEC_ELEMENT_IDS.values()))
-        .values('element_id_id', 'data_value')
-    )
+    interests_qs = []
+    if occ:
+        interests_qs = (
+            OnetInterest.objects.filter(onetsoc_code=occ, scale_id_id='OI', element_id_id__in=set(_RIASEC_ELEMENT_IDS.values()))
+            .values('element_id_id', 'data_value')
+        )
     scores = {k: 0.0 for k in _RIASEC_ELEMENT_IDS.keys()}
     for r in list(interests_qs):
         eid = r.get('element_id_id')
@@ -108,17 +133,19 @@ def api_onet_occupation_detail(request, soc_code: str):
                 scores[key] = _float(r.get('data_value'))
 
     # Related occupations
-    rel_qs = (
-        OnetRelatedOccupation.objects.filter(onetsoc_code=occ)
-        .select_related('related_onetsoc_code')
-        .order_by('related_index')
-        .values(
-            'related_onetsoc_code__onetsoc_code',
-            'related_onetsoc_code__title',
-            'relatedness_tier',
-            'related_index',
-        )[:30]
-    )
+    rel_qs = []
+    if occ:
+        rel_qs = (
+            OnetRelatedOccupation.objects.filter(onetsoc_code=occ)
+            .select_related('related_onetsoc_code')
+            .order_by('related_index')
+            .values(
+                'related_onetsoc_code__onetsoc_code',
+                'related_onetsoc_code__title',
+                'relatedness_tier',
+                'related_index',
+            )[:30]
+        )
     related = [
         {
             'soc_code': r['related_onetsoc_code__onetsoc_code'],
@@ -129,15 +156,29 @@ def api_onet_occupation_detail(request, soc_code: str):
         for r in list(rel_qs)
     ]
 
+    if occ:
+        return Response(
+            {
+                'onetsoc_code': occ.onetsoc_code,
+                'title': occ.title,
+                'description': occ.description,
+                'riasec': scores,
+                'tasks': tasks,
+                'top_skills': skills,
+                'related': related,
+            }
+        )
+
     return Response(
         {
-            'onetsoc_code': occ.onetsoc_code,
-            'title': occ.title,
-            'description': occ.description,
+            'onetsoc_code': occ_snap.get('onetsoc_code'),
+            'title': occ_snap.get('title'),
+            'description': occ_snap.get('description'),
+            'job_zone': occ_snap.get('job_zone'),
             'riasec': scores,
-            'tasks': tasks,
-            'top_skills': skills,
-            'related': related,
+            'tasks': [],
+            'top_skills': [],
+            'related': [],
         }
     )
 

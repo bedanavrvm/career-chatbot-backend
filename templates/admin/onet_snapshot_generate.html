@@ -1,0 +1,43 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Generate O*NET Occupation Snapshot (From Imported O*NET Tables)</h1>
+
+  {% if error %}
+    <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if ok %}
+    <p style="color: #468847;"><strong>OK:</strong> {{ ok }}</p>
+  {% endif %}
+
+  {% if existing_count != None %}
+    <p>Current snapshot rows in DB: <strong>{{ existing_count }}</strong></p>
+  {% endif %}
+
+  <p>
+    This builds the snapshot table directly from your imported O*NET tables.
+    Use this on your local environment (after running O*NET import) to generate a snapshot, then export/share it to Render.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_truncate">Truncate snapshot table first</label>
+        <input id="id_truncate" type="checkbox" name="truncate" {% if truncate %}checked{% endif %} />
+      </div>
+
+      <div class="form-row">
+        <label for="id_max_description_len">Max description length</label>
+        <input id="id_max_description_len" type="number" name="max_description_len" value="{{ max_description_len }}" min="0" />
+        <p class="help">Set 0 for no truncation.</p>
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="Generate Snapshot" class="default" />
+    </div>
+  </form>
+{% endblock %}
