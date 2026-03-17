@@ -1628,6 +1628,122 @@ def admin_onet_snapshot_generate(request):
 
 @staff_member_required
 @ensure_csrf_cookie
+def _admin_onet_program_field_occupation_export_impl(request):
+    try:
+        from catalog.models import Program, Field  # type: ignore
+    except Exception:
+        Program = None  # type: ignore
+        Field = None  # type: ignore
+
+    try:
+        from .mapping_models import OnetFieldOccupationMapping  # type: ignore
+    except Exception:
+        OnetFieldOccupationMapping = None  # type: ignore
+
+    if Program is None or Field is None or OnetFieldOccupationMapping is None:
+        return render(request, 'admin/onet_dashboard.html', {'error': 'Required apps/models not available'})
+
+    field_slug = (request.GET.get('field_slug') or '').strip().lower()
+    include_unassigned = str(request.GET.get('include_unassigned') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+
+    title_by_code: dict[str, str] = {}
+    try:
+        title_by_code = {
+            str(code).strip(): (title or '')
+            for code, title in OnetOccupationSnapshot.objects.all().values_list('onetsoc_code', 'title')
+            if code
+        }
+    except Exception:
+        title_by_code = {}
+
+    qs_prog = Program.objects.select_related('field').all().order_by('id')
+    if not include_unassigned:
+        qs_prog = qs_prog.filter(field__isnull=False)
+    if field_slug:
+        qs_prog = qs_prog.filter(field__slug__iexact=field_slug)
+
+    qs_map = OnetFieldOccupationMapping.objects.select_related('field').all()
+    if field_slug:
+        qs_map = qs_map.filter(field__slug__iexact=field_slug)
+
+    mappings_by_field_id: dict[int, list[tuple[str, str, str, str]]] = {}
+    for m in qs_map.values('field_id', 'occupation_code', 'weight', 'notes'):
+        fid = int(m.get('field_id') or 0)
+        if not fid:
+            continue
+        code = (m.get('occupation_code') or '').strip()
+        if not code:
+            continue
+        weight = '' if m.get('weight') is None else str(m.get('weight'))
+        notes = (m.get('notes') or '').strip()
+        title = (title_by_code.get(code, '') or '').strip()
+        mappings_by_field_id.setdefault(fid, []).append((code, title, weight, notes))
+
+    resp = HttpResponse(content_type='text/csv')
+    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    resp['Content-Disposition'] = f'attachment; filename=program_field_occupation_mappings_{ts}.csv'
+
+    w = csv.writer(resp)
+    w.writerow([
+        'program_id',
+        'program_name',
+        'field_slug',
+        'field_name',
+        'occupation_code',
+        'occupation_title',
+        'weight',
+        'notes',
+    ])
+
+    for p in qs_prog.iterator(chunk_size=2000):
+        fld = getattr(p, 'field', None)
+        if fld is None:
+            if include_unassigned:
+                w.writerow([
+                    str(getattr(p, 'id', '') or ''),
+                    (getattr(p, 'normalized_name', '') or getattr(p, 'name', '') or '').strip(),
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                ])
+            continue
+
+        occs = mappings_by_field_id.get(int(getattr(fld, 'id', 0) or 0), [])
+        if not occs:
+            continue
+
+        prog_id = str(getattr(p, 'id', '') or '')
+        prog_name = (getattr(p, 'normalized_name', '') or getattr(p, 'name', '') or '').strip()
+        fld_slug = (getattr(fld, 'slug', '') or '').strip()
+        fld_name = (getattr(fld, 'name', '') or '').strip()
+        for code, title, weight, notes in occs:
+            w.writerow([
+                prog_id,
+                prog_name,
+                fld_slug,
+                fld_name,
+                code,
+                title,
+                weight,
+                notes,
+            ])
+
+    return resp
+
+
+@staff_member_required
+@ensure_csrf_cookie
+def admin_onet_program_field_occupation_export(request):
+    if settings.DEBUG and is_local_request(request):
+        return _admin_onet_program_field_occupation_export_impl(request)
+    return csrf_protect(_admin_onet_program_field_occupation_export_impl)(request)
+
+
+@staff_member_required
+@ensure_csrf_cookie
 def _admin_onet_mapping_coverage_impl(request):
     try:
         from catalog.models import Field, Program  # type: ignore

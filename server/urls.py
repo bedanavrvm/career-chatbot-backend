@@ -38,6 +38,7 @@ from onetdata.admin_views import admin_onet_mapping_coverage as onet_admin_mappi
 from onetdata.admin_views import admin_onet_mapping_import as onet_admin_mapping_import
 from onetdata.admin_views import admin_onet_mapping_manual as onet_admin_mapping_manual
 from onetdata.admin_views import admin_onet_mapping_suggest as onet_admin_mapping_suggest
+from onetdata.admin_views import admin_onet_program_field_occupation_export as onet_admin_program_field_occupation_export
 from onetdata.admin_views import admin_onet_snapshot_import as onet_admin_snapshot_import
 from onetdata.admin_views import admin_onet_snapshot_export as onet_admin_snapshot_export
 from onetdata.admin_views import admin_onet_snapshot_generate as onet_admin_snapshot_generate
@@ -75,6 +76,7 @@ urlpatterns = [
     path('admin/onet/snapshot/import', onet_admin_snapshot_import, name='admin_onet_snapshot_import'),
     path('admin/onet/snapshot/export', onet_admin_snapshot_export, name='admin_onet_snapshot_export'),
     path('admin/onet/snapshot/generate', onet_admin_snapshot_generate, name='admin_onet_snapshot_generate'),
+    path('admin/onet/exports/program-field-occupations', onet_admin_program_field_occupation_export, name='admin_onet_program_field_occupation_export'),
     path('admin/onet/mappings/suggest', onet_admin_mapping_suggest, name='admin_onet_mapping_suggest'),
     path('admin/onet/mappings/import', onet_admin_mapping_import, name='admin_onet_mapping_import'),
     path('admin/onet/mappings/manual', onet_admin_mapping_manual, name='admin_onet_mapping_manual'),
