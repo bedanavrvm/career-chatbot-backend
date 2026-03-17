@@ -1486,6 +1486,38 @@ def admin_onet_snapshot_import(request):
 
 @staff_member_required
 @ensure_csrf_cookie
+def _admin_onet_snapshot_export_impl(request):
+    try:
+        rows = list(OnetOccupationSnapshot.objects.all().values('onetsoc_code', 'title', 'description', 'job_zone'))
+    except Exception:
+        rows = []
+
+    resp = HttpResponse(content_type='text/csv')
+    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    resp['Content-Disposition'] = f'attachment; filename=onet_occupation_snapshot_{ts}.csv'
+
+    w = csv.writer(resp)
+    w.writerow(['onetsoc_code', 'title', 'description', 'job_zone'])
+    for r in rows:
+        w.writerow([
+            (r.get('onetsoc_code') or '').strip(),
+            (r.get('title') or '').strip(),
+            (r.get('description') or '').strip(),
+            '' if r.get('job_zone') is None else str(r.get('job_zone')),
+        ])
+    return resp
+
+
+@staff_member_required
+@ensure_csrf_cookie
+def admin_onet_snapshot_export(request):
+    if settings.DEBUG and is_local_request(request):
+        return _admin_onet_snapshot_export_impl(request)
+    return csrf_protect(_admin_onet_snapshot_export_impl)(request)
+
+
+@staff_member_required
+@ensure_csrf_cookie
 def _admin_onet_snapshot_generate_impl(request):
     defaults = {
         'truncate': True,
