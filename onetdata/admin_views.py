@@ -109,6 +109,16 @@ def _tokens(text: str) -> list[str]:
     return [t.lower() for t in _WORD_RE.findall(text or "")]
 
 
+def _token_variants(token: str) -> list[str]:
+    t = (token or '').strip().lower()
+    if not t:
+        return []
+    out = [t]
+    if len(t) >= 4 and t.endswith('s') and not t.endswith('ss'):
+        out.append(t[:-1])
+    return out
+
+
 def _keywords_from_program_names(names_with_counts: list[tuple[str, int]], max_keywords: int) -> list[str]:
     stop = {
         'bachelor',
@@ -178,8 +188,104 @@ def _keywords_from_program_names(names_with_counts: list[tuple[str, int]], max_k
     return [k for k, _ in c.most_common(max_keywords)]
 
 
+def _expand_field_keywords(field_slug: str, base_keywords: list[str]) -> list[str]:
+    slug = (field_slug or '').strip().lower()
+    slug_tokens = set(_tokens(slug.replace('-', ' ')))
+    expansions = {
+        'economics': [
+            'economist',
+            'economics',
+            'econometric',
+            'econometrics',
+            'policy',
+            'market',
+            'markets',
+            'trade',
+            'statistics',
+            'statistician',
+            'analyst',
+            'finance',
+            'financial',
+            'bank',
+            'banker',
+            'banking',
+            'credit',
+            'loan',
+            'lending',
+            'mortgage',
+            'investment',
+            'investments',
+            'investor',
+            'equity',
+            'securities',
+            'broker',
+            'trader',
+            'treasury',
+            'budget',
+            'budgeting',
+            'accountant',
+            'accounting',
+            'audit',
+            'auditor',
+            'tax',
+            'taxation',
+            'insurance',
+            'underwriter',
+            'risk',
+        ],
+        'finance-accounting': ['accountant', 'accounting', 'auditor', 'tax', 'finance', 'financial', 'controller', 'bookkeeping'],
+        'mathematics-statistics': ['mathematics', 'mathematical', 'statistician', 'statistics', 'data', 'analytics', 'quantitative', 'actuary'],
+        'public-administration': ['government', 'policy', 'public', 'administration', 'governance', 'civil', 'regulation', 'planning'],
+        'natural-resources': ['environment', 'environmental', 'conservation', 'forestry', 'wildlife', 'agriculture', 'resource', 'sustainability'],
+        'geospatial-surveying': ['gis', 'geospatial', 'survey', 'surveying', 'cartography', 'mapping', 'remote', 'sensing', 'geomatics'],
+        'pharmacy': ['pharmacist', 'pharmaceutical', 'drug', 'medication', 'clinical'],
+        'medicine': ['medical', 'physician', 'doctor', 'clinical', 'health', 'hospital'],
+        'dentistry': ['dentist', 'dental', 'oral'],
+        'law': ['legal', 'lawyer', 'attorney', 'paralegal', 'judge', 'compliance'],
+    }
+
+    extra: list[str] = []
+    if slug in expansions:
+        extra.extend(expansions[slug])
+
+    rules: list[tuple[set[str], list[str]]] = [
+        ({'engineering', 'engineer'}, ['engineer', 'engineering', 'technician', 'technicians', 'technologist', 'technologists', 'design', 'maintenance']),
+        ({'computer', 'computing', 'software', 'it', 'information', 'technology', 'cybersecurity', 'security'}, ['software', 'developer', 'developers', 'programmer', 'programmers', 'data', 'systems', 'network', 'networks', 'security', 'analyst', 'analytics', 'database', 'cloud']),
+        ({'business', 'commerce', 'management', 'marketing', 'sales', 'entrepreneurship'}, ['business', 'manager', 'management', 'marketing', 'sales', 'operations', 'strategy', 'analyst', 'consultant', 'consulting', 'customer', 'customers']),
+        ({'accounting', 'audit', 'auditing'}, ['accountant', 'accounting', 'audit', 'auditor', 'tax', 'taxation', 'bookkeeping', 'payroll', 'controller']),
+        ({'finance', 'banking', 'investment'}, ['finance', 'financial', 'bank', 'banking', 'credit', 'loan', 'lending', 'investment', 'investments', 'securities', 'equity', 'portfolio', 'risk', 'treasury']),
+        ({'education', 'teaching', 'teacher', 'teachers'}, ['education', 'teacher', 'teachers', 'instructor', 'instructors', 'tutor', 'tutors', 'curriculum', 'training', 'trainer', 'trainers']),
+        ({'health', 'healthcare', 'medicine', 'medical', 'nursing', 'nurse', 'nurses'}, ['health', 'healthcare', 'medical', 'clinical', 'nurse', 'nursing', 'therapist', 'therapists', 'technologist', 'technologists', 'assistant', 'assistants']),
+        ({'law', 'legal', 'justice', 'criminology'}, ['legal', 'law', 'lawyer', 'attorney', 'paralegal', 'compliance', 'investigator', 'investigators', 'court', 'courts', 'judge', 'judges']),
+        ({'agriculture', 'agricultural', 'forestry', 'wildlife', 'natural', 'resources'}, ['agriculture', 'agricultural', 'farm', 'farming', 'forestry', 'wildlife', 'conservation', 'environment', 'environmental', 'resource', 'resources', 'sustainability']),
+        ({'environment', 'environmental', 'climate', 'sustainability'}, ['environment', 'environmental', 'climate', 'sustainability', 'conservation', 'ecology', 'waste', 'water', 'pollution', 'energy']),
+        ({'construction', 'building', 'architecture', 'surveying', 'civil'}, ['construction', 'building', 'architect', 'architectural', 'drafting', 'surveyor', 'surveying', 'civil', 'planning', 'inspector', 'inspectors']),
+        ({'math', 'mathematics', 'statistics', 'statistical', 'data', 'analytics'}, ['mathematics', 'statistician', 'statistics', 'data', 'analytics', 'analyst', 'quantitative', 'model', 'modeling', 'research']),
+    ]
+
+    for triggers, words in rules:
+        if slug_tokens & triggers:
+            extra.extend(words)
+
+    out = []
+    for t in (extra + list(base_keywords or [])):
+        tt = (t or '').strip().lower()
+        if not tt:
+            continue
+        if tt not in out:
+            out.append(tt)
+    return out
+
+
 def _score_occupations(occupations: list[dict], keywords: list[str]) -> dict[str, float]:
-    kw = [k.lower() for k in keywords if k and str(k).strip()]
+    kw: list[str] = []
+    for k in keywords:
+        ks = (str(k) if k is not None else '').strip().lower()
+        if not ks:
+            continue
+        for vv in _token_variants(ks):
+            if vv and vv not in kw:
+                kw.append(vv)
     if not kw:
         return {}
 
@@ -199,16 +305,18 @@ def _score_occupations(occupations: list[dict], keywords: list[str]) -> dict[str
         if not (title or desc):
             continue
 
-        title_tokens = set(_tokens(title))
-        desc_tokens = set(_tokens(desc))
+        title_tokens_raw = _tokens(title)
+        desc_tokens_raw = _tokens(desc)
+        title_tokens = set(v for t in title_tokens_raw for v in _token_variants(t))
+        desc_tokens = set(v for t in desc_tokens_raw for v in _token_variants(t))
         if not (title_tokens or desc_tokens):
             continue
 
         title_hits = sum(1 for k in kw if k in title_tokens)
-        if title_hits <= 0:
-            continue
-
         desc_hits = sum(1 for k in kw if k in desc_tokens)
+
+        if title_hits <= 0 and desc_hits < 3:
+            continue
         if title_hits < 2 and desc_hits < 3:
             continue
         s = (3.0 * float(title_hits)) + (1.0 * float(desc_hits))
@@ -660,6 +768,13 @@ def _admin_onet_mapping_manual_impl(request):
     keywords_raw = (request.GET.get('keywords') or request.POST.get('keywords') or '').strip()
     keywords = _parse_keywords(keywords_raw)
     source = (request.GET.get('source') or request.POST.get('source') or 'auto').strip().lower()
+    smart = str(request.GET.get('smart') or request.POST.get('smart') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    include_desc = str(request.GET.get('include_desc') or request.POST.get('include_desc') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    min_score_raw = (request.GET.get('min_score') or request.POST.get('min_score') or '').strip()
+    try:
+        min_score = float(min_score_raw) if min_score_raw else 6.0
+    except Exception:
+        min_score = 6.0
     job_zone_raw = (request.GET.get('job_zone') or request.POST.get('job_zone') or '').strip()
     offset_raw = (request.GET.get('offset') or request.POST.get('offset') or '').strip()
     limit_raw = (request.GET.get('limit') or request.POST.get('limit') or '').strip()
@@ -688,6 +803,9 @@ def _admin_onet_mapping_manual_impl(request):
 
     occs = []
     occ_source = ''
+    occ_scores = {}
+    smart_keywords_used = []
+    smart_note = ''
 
     prev_offset = max(0, int(offset) - int(limit))
     next_offset = int(offset) + int(limit)
@@ -730,32 +848,175 @@ def _admin_onet_mapping_manual_impl(request):
     for src in preferred_sources:
         if src == 'snapshot':
             try:
-                qs = OnetOccupationSnapshot.objects.all()
-                qs = _apply_occ_filters(qs, supports_job_zone=True)
-                occs = list(
-                    qs.order_by('title')
-                    .values('onetsoc_code', 'title', 'description')
-                    [offset:offset + limit]
-                )
-                occ_source = 'snapshot'
+                if smart and fld:
+                    qs_all = OnetOccupationSnapshot.objects.all()
+                    if job_zone is not None:
+                        qs_all = qs_all.filter(job_zone=job_zone)
+                    occs_all = list(qs_all.values('onetsoc_code', 'title', 'description'))
+
+                    stop = {
+                        'and', 'or', 'of', 'in', 'for', 'with', 'to', 'the',
+                        'studies', 'science', 'arts', 'technology', 'management',
+                    }
+                    derived = [t for t in _tokens(getattr(fld, 'name', '') or '') if t not in stop and len(t) > 2]
+                    smart_keywords = []
+
+                    try:
+                        from catalog.models import Program  # type: ignore
+                    except Exception:
+                        Program = None  # type: ignore
+
+                    prog_kws: list[str] = []
+                    if Program is not None:
+                        try:
+                            from collections import Counter
+                            prog_names = list(
+                                Program.objects.filter(field=fld)
+                                .exclude(normalized_name='')
+                                .values_list('normalized_name', flat=True)[:5000]
+                            )
+                            counts = Counter(prog_names)
+                            top_names = counts.most_common(40)
+                            prog_kws = _keywords_from_program_names(top_names, max_keywords=25)
+                        except Exception:
+                            prog_kws = []
+
+                    merged = _expand_field_keywords(getattr(fld, 'slug', '') or '', derived + prog_kws + keywords)
+                    for t in merged:
+                        if t and t not in smart_keywords:
+                            smart_keywords.append(t)
+
+                    smart_keywords_used = list(smart_keywords)
+
+                    if q:
+                        for t in _tokens(q):
+                            if t and t not in smart_keywords:
+                                smart_keywords.insert(0, t)
+
+                    smart_keywords_used = list(smart_keywords)
+
+                    if not include_desc:
+                        occs_for_score = [{'onetsoc_code': o.get('onetsoc_code'), 'title': o.get('title'), 'description': ''} for o in occs_all]
+                    else:
+                        occs_for_score = occs_all
+
+                    scores = _score_occupations(occs_for_score, smart_keywords)
+                    occ_scores = scores
+                    ranked = sorted(
+                        occs_all,
+                        key=lambda o: (-(scores.get((o.get('onetsoc_code') or '').strip(), 0.0)), (o.get('title') or '')),
+                    )
+
+                    ranked_nonzero = [o for o in ranked if scores.get((o.get('onetsoc_code') or '').strip(), 0.0) >= float(min_score)]
+                    if ranked_nonzero:
+                        occs = ranked_nonzero[offset:offset + limit]
+                    else:
+                        smart_note = f'No results met min_score={min_score:g}; showing top ranked results instead.'
+                        occs = ranked[offset:offset + limit]
+                    occ_source = 'snapshot'
+                else:
+                    qs = OnetOccupationSnapshot.objects.all()
+                    qs = _apply_occ_filters(qs, supports_job_zone=True)
+                    occs = list(
+                        qs.order_by('title')
+                        .values('onetsoc_code', 'title', 'description')
+                        [offset:offset + limit]
+                    )
+                    occ_source = 'snapshot'
             except Exception:
                 occs = []
             if occs:
                 break
         if src == 'onet':
             try:
-                qs = OnetOccupation.objects.all()
-                qs = _apply_occ_filters_onet(qs)
-                occs = list(
-                    qs.order_by('title')
-                    .values('onetsoc_code', 'title', 'description')
-                    [offset:offset + limit]
-                )
-                occ_source = 'onet'
+                if smart and fld:
+                    qs_all = OnetOccupation.objects.all()
+                    qs_all = _apply_occ_filters_onet(qs_all) if (q or keywords or job_zone is not None) else qs_all
+                    occs_all = list(qs_all.values('onetsoc_code', 'title', 'description'))
+
+                    stop = {
+                        'and', 'or', 'of', 'in', 'for', 'with', 'to', 'the',
+                        'studies', 'science', 'arts', 'technology', 'management',
+                    }
+                    derived = [t for t in _tokens(getattr(fld, 'name', '') or '') if t not in stop and len(t) > 2]
+                    smart_keywords = []
+
+                    try:
+                        from catalog.models import Program  # type: ignore
+                    except Exception:
+                        Program = None  # type: ignore
+
+                    prog_kws: list[str] = []
+                    if Program is not None:
+                        try:
+                            from collections import Counter
+                            prog_names = list(
+                                Program.objects.filter(field=fld)
+                                .exclude(normalized_name='')
+                                .values_list('normalized_name', flat=True)[:5000]
+                            )
+                            counts = Counter(prog_names)
+                            top_names = counts.most_common(40)
+                            prog_kws = _keywords_from_program_names(top_names, max_keywords=25)
+                        except Exception:
+                            prog_kws = []
+
+                    merged = _expand_field_keywords(getattr(fld, 'slug', '') or '', derived + prog_kws + keywords)
+                    for t in merged:
+                        if t and t not in smart_keywords:
+                            smart_keywords.append(t)
+
+                    smart_keywords_used = list(smart_keywords)
+
+                    if q:
+                        for t in _tokens(q):
+                            if t and t not in smart_keywords:
+                                smart_keywords.insert(0, t)
+
+                    smart_keywords_used = list(smart_keywords)
+
+                    if not include_desc:
+                        occs_for_score = [{'onetsoc_code': o.get('onetsoc_code'), 'title': o.get('title'), 'description': ''} for o in occs_all]
+                    else:
+                        occs_for_score = occs_all
+
+                    scores = _score_occupations(occs_for_score, smart_keywords)
+                    occ_scores = scores
+                    ranked = sorted(
+                        occs_all,
+                        key=lambda o: (-(scores.get((o.get('onetsoc_code') or '').strip(), 0.0)), (o.get('title') or '')),
+                    )
+
+                    ranked_nonzero = [o for o in ranked if scores.get((o.get('onetsoc_code') or '').strip(), 0.0) >= float(min_score)]
+                    if ranked_nonzero:
+                        occs = ranked_nonzero[offset:offset + limit]
+                    else:
+                        smart_note = f'No results met min_score={min_score:g}; showing top ranked results instead.'
+                        occs = ranked[offset:offset + limit]
+                    occ_source = 'onet'
+                else:
+                    qs = OnetOccupation.objects.all()
+                    qs = _apply_occ_filters_onet(qs)
+                    occs = list(
+                        qs.order_by('title')
+                        .values('onetsoc_code', 'title', 'description')
+                        [offset:offset + limit]
+                    )
+                    occ_source = 'onet'
             except Exception:
                 occs = []
             if occs:
                 break
+
+    if smart and occ_scores and occs:
+        try:
+            for o in occs:
+                code = (o.get('onetsoc_code') or '').strip()
+                if not code:
+                    continue
+                o['score'] = float(occ_scores.get(code, 0.0) or 0.0)
+        except Exception:
+            pass
 
     if request.method == 'GET':
         return render(
@@ -768,12 +1029,18 @@ def _admin_onet_mapping_manual_impl(request):
                 'q': q,
                 'keywords': keywords_raw,
                 'source': source,
+                'smart': smart,
+                'include_desc': include_desc,
+                'min_score': min_score,
                 'job_zone': job_zone,
                 'offset': offset,
                 'prev_offset': prev_offset,
                 'next_offset': next_offset,
                 'limit': limit,
                 'occupations': occs,
+                'occ_scores': occ_scores,
+                'smart_keywords_used': ' '.join(smart_keywords_used),
+                'smart_note': smart_note,
                 'existing_codes': existing_codes,
                 'occ_source': occ_source,
             },
@@ -790,12 +1057,18 @@ def _admin_onet_mapping_manual_impl(request):
                     'q': q,
                     'keywords': keywords_raw,
                     'source': source,
+                    'smart': smart,
+                    'include_desc': include_desc,
+                    'min_score': min_score,
                     'job_zone': job_zone,
                     'offset': offset,
                     'prev_offset': prev_offset,
                     'next_offset': next_offset,
                     'limit': limit,
                     'occupations': occs,
+                    'occ_scores': occ_scores,
+                    'smart_keywords_used': ' '.join(smart_keywords_used),
+                    'smart_note': smart_note,
                     'existing_codes': existing_codes,
                     'occ_source': occ_source,
                     'error': 'Choose a Field first',
@@ -814,12 +1087,18 @@ def _admin_onet_mapping_manual_impl(request):
                     'q': q,
                     'keywords': keywords_raw,
                     'source': source,
+                    'smart': smart,
+                    'include_desc': include_desc,
+                    'min_score': min_score,
                     'job_zone': job_zone,
                     'offset': offset,
                     'prev_offset': prev_offset,
                     'next_offset': next_offset,
                     'limit': limit,
                     'occupations': occs,
+                    'occ_scores': occ_scores,
+                    'smart_keywords_used': ' '.join(smart_keywords_used),
+                    'smart_note': smart_note,
                     'existing_codes': existing_codes,
                     'occ_source': occ_source,
                     'error': 'Select at least one occupation',
@@ -865,12 +1144,18 @@ def _admin_onet_mapping_manual_impl(request):
                 'q': q,
                 'keywords': keywords_raw,
                 'source': source,
+                'smart': smart,
+                'include_desc': include_desc,
+                'min_score': min_score,
                 'job_zone': job_zone,
                 'offset': offset,
                 'prev_offset': prev_offset,
                 'next_offset': next_offset,
                 'limit': limit,
                 'occupations': occs,
+                'occ_scores': occ_scores,
+                'smart_keywords_used': ' '.join(smart_keywords_used),
+                'smart_note': smart_note,
                 'existing_codes': existing_codes2,
                 'occ_source': occ_source,
                 'ok': f'Wrote {wrote} mappings for field {fld.slug}',
@@ -890,12 +1175,18 @@ def _admin_onet_mapping_manual_impl(request):
                 'q': q,
                 'keywords': keywords_raw,
                 'source': source,
+                'smart': smart,
+                'include_desc': include_desc,
+                'min_score': min_score,
                 'job_zone': job_zone,
                 'offset': offset,
                 'prev_offset': prev_offset,
                 'next_offset': next_offset,
                 'limit': limit,
                 'occupations': occs,
+                'occ_scores': occ_scores,
+                'smart_keywords_used': ' '.join(smart_keywords_used),
+                'smart_note': smart_note,
                 'existing_codes': existing_codes,
                 'occ_source': occ_source,
                 'error': str(e),

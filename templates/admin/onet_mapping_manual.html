@@ -40,6 +40,24 @@
       </div>
 
       <div class="form-row">
+        <label for="id_smart">Smart search</label>
+        <input id="id_smart" type="checkbox" name="smart" {% if smart %}checked{% endif %} />
+        <p class="help">If enabled, the system will derive keywords from the selected Field name and rank occupations automatically.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_include_desc">Include description</label>
+        <input id="id_include_desc" type="checkbox" name="include_desc" {% if include_desc %}checked{% endif %} />
+        <p class="help">If enabled, smart search will use title + description. If disabled, it uses title only.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="id_min_score">Min score</label>
+        <input id="id_min_score" type="number" step="0.1" name="min_score" value="{{ min_score }}" />
+        <p class="help">Smart search will filter out occupations below this score (fallback will show top results if nothing meets it).</p>
+      </div>
+
+      <div class="form-row">
         <label for="id_source">Source</label>
         <select id="id_source" name="source">
           <option value="auto" {% if source == 'auto' %}selected{% endif %}>Auto (prefer snapshot)</option>
@@ -86,6 +104,9 @@
     <input type="hidden" name="q" value="{{ q }}" />
     <input type="hidden" name="keywords" value="{{ keywords }}" />
     <input type="hidden" name="source" value="{{ source }}" />
+    <input type="hidden" name="smart" value="{% if smart %}1{% else %}0{% endif %}" />
+    <input type="hidden" name="include_desc" value="{% if include_desc %}1{% else %}0{% endif %}" />
+    <input type="hidden" name="min_score" value="{{ min_score }}" />
     <input type="hidden" name="job_zone" value="{{ job_zone }}" />
     <input type="hidden" name="offset" value="{{ offset }}" />
     <input type="hidden" name="limit" value="{{ limit }}" />
@@ -113,12 +134,21 @@
         Showing {{ occupations|length }} results (offset={{ offset }}, limit={{ limit }}). Source: <strong>{{ occ_source }}</strong>.
       </p>
 
+      {% if smart %}
+        {% if smart_keywords_used %}
+          <p style="color:#666; margin-top: 4px;">Smart keywords used: <code>{{ smart_keywords_used }}</code></p>
+        {% endif %}
+        {% if smart_note %}
+          <p style="color:#b58900; margin-top: 4px;"><strong>Note:</strong> {{ smart_note }}</p>
+        {% endif %}
+      {% endif %}
+
       <p style="margin-top: 6px;">
         {% if offset|add:"0" > 0 %}
-          <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&job_zone={{ job_zone }}&offset={{ prev_offset }}&limit={{ limit }}">Prev</a>
+          <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&smart={% if smart %}1{% else %}0{% endif %}&include_desc={% if include_desc %}1{% else %}0{% endif %}&job_zone={{ job_zone }}&offset={{ prev_offset }}&limit={{ limit }}">Prev</a>
           |
         {% endif %}
-        <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&job_zone={{ job_zone }}&offset={{ next_offset }}&limit={{ limit }}">Next</a>
+        <a href="?field_slug={{ field_slug }}&q={{ q|urlencode }}&keywords={{ keywords|urlencode }}&source={{ source }}&smart={% if smart %}1{% else %}0{% endif %}&include_desc={% if include_desc %}1{% else %}0{% endif %}&job_zone={{ job_zone }}&offset={{ next_offset }}&limit={{ limit }}">Next</a>
       </p>
 
       <table class="adminlist" style="width:100%; border-collapse: collapse;">
@@ -127,6 +157,9 @@
             <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Select</th>
             <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">SOC</th>
             <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Title</th>
+            {% if smart %}
+              <th style="text-align:right; border-bottom: 1px solid #ddd; padding: 6px;">Score</th>
+            {% endif %}
             <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 6px;">Already mapped?</th>
           </tr>
         </thead>
@@ -142,6 +175,9 @@
               </td>
               <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;"><code>{{ o.onetsoc_code }}</code></td>
               <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">{{ o.title }}</td>
+              {% if smart %}
+                <td style="padding: 6px; border-bottom: 1px solid #f0f0f0; text-align:right;"><code>{{ o.score|default:"0" }}</code></td>
+              {% endif %}
               <td style="padding: 6px; border-bottom: 1px solid #f0f0f0;">
                 {% if o.onetsoc_code in existing_codes %}
                   <span style="color:#468847;">yes</span>
