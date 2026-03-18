@@ -1495,6 +1495,19 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
             progress_every = 500
 
         logger.info("Starting load_csvs dry_run=%s processed_dir=%s", dry_run, cfg.processed_dir)
+        try:
+            logger.info(
+                "load: expected inputs present? institutions=%s fields=%s subjects=%s programs_deduped=%s programs=%s program_costs=%s yearly_cutoffs=%s",
+                (cfg.processed_dir / "institutions.csv").exists(),
+                (cfg.processed_dir / "fields.csv").exists(),
+                (cfg.processed_dir / "subjects.csv").exists(),
+                (cfg.processed_dir / "programs_deduped.csv").exists(),
+                (cfg.processed_dir / "programs.csv").exists(),
+                (cfg.processed_dir / "program_costs.csv").exists(),
+                (cfg.processed_dir / "yearly_cutoffs.csv").exists(),
+            )
+        except Exception:
+            pass
 
         def inc(key: str, sid: Optional[str] = None) -> None:
             changes[key] += 1
@@ -1503,9 +1516,12 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         # Institutions
         inst_path = cfg.processed_dir / "institutions.csv"
         if inst_path.exists():
+            logger.info("load: Institutions start file=%s", inst_path)
+            rows = 0
             with open(inst_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
+                    rows += 1
                     code_val = row.get("code", "").strip()
                     if not code_val:
                         continue
@@ -1531,14 +1547,33 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             inc("institutions_updated")
                         else:
                             inc("institutions_unchanged")
+                    if progress_every and rows % progress_every == 0:
+                        logger.info(
+                            "load: Institutions progress rows=%d created=%d updated=%d",
+                            rows,
+                            changes.get("institutions_created", 0),
+                            changes.get("institutions_updated", 0),
+                        )
+            logger.info(
+                "load: Institutions done rows=%d created=%d updated=%d unchanged=%d",
+                rows,
+                changes.get("institutions_created", 0),
+                changes.get("institutions_updated", 0),
+                changes.get("institutions_unchanged", 0),
+            )
+        else:
+            logger.warning("load: Institutions skipped (missing file=%s)", inst_path)
         # Fields (simple by-name hierarchy)
         fields_cache = {}
         fld_path = cfg.processed_dir / "fields.csv"
         if fld_path.exists():
+            logger.info("load: Fields start file=%s", fld_path)
             with open(fld_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 # First pass create parents
+                rows = 0
                 for row in reader:
+                    rows += 1
                     name = row.get("name", "").strip()
                     if not name:
                         continue
@@ -1554,12 +1589,18 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         if fld.parent_id is None:
                             fld.parent = fields_cache[parent_name]
                             fld.save(update_fields=["parent"])
+            logger.info("load: Fields done rows=%d unique=%d", rows, len(fields_cache))
+        else:
+            logger.warning("load: Fields skipped (missing file=%s)", fld_path)
         # Subjects: preload canonical first (mappings/subjects_canonical.csv), then processed/subjects.csv
         canon_subj = MAPPINGS_DIR / "subjects_canonical.csv"
         def _load_subjects_file(fp: Path) -> None:
+            logger.info("load: Subjects start file=%s", fp)
             with open(fp, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
+                rows = 0
                 for row in reader:
+                    rows += 1
                     code = (row.get("code") or "").strip()
                     name = (row.get("name") or "").strip()
                     group = (row.get("group") or "").strip()
@@ -1582,16 +1623,34 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             inc("subjects_updated")
                         else:
                             inc("subjects_unchanged")
+                    if progress_every and rows % progress_every == 0:
+                        logger.info(
+                            "load: Subjects progress rows=%d created=%d updated=%d",
+                            rows,
+                            changes.get("subjects_created", 0),
+                            changes.get("subjects_updated", 0),
+                        )
+            logger.info(
+                "load: Subjects done file=%s rows=%d created=%d updated=%d unchanged=%d",
+                fp,
+                rows,
+                changes.get("subjects_created", 0),
+                changes.get("subjects_updated", 0),
+                changes.get("subjects_unchanged", 0),
+            )
         if canon_subj.exists():
             _load_subjects_file(canon_subj)
         subj_path = cfg.processed_dir / "subjects.csv"
         if subj_path.exists():
             _load_subjects_file(subj_path)
+        else:
+            logger.warning("load: Subjects skipped (missing file=%s)", subj_path)
         # Programs: prefer deduplicated file if present (ensures master selection is honored)
         prog_path = cfg.processed_dir / "programs_deduped.csv"
         if not prog_path.exists():
             prog_path = cfg.processed_dir / "programs.csv"
         if prog_path.exists():
+            logger.info("load: Programs start file=%s", prog_path)
             def _infer_award(level_val: str, label: str) -> str:
                 lvl = (level_val or "").strip().lower()
                 s = (label or "").strip().upper()
@@ -1722,9 +1781,18 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             inc("programs_unchanged", sid)
                     if progress_every and i % progress_every == 0:
                         logger.info("Loading programs... rows=%d created=%d updated=%d", i, changes.get("programs_created", 0), changes.get("programs_updated", 0))
+            logger.info(
+                "load: Programs done created=%d updated=%d unchanged=%d",
+                changes.get("programs_created", 0),
+                changes.get("programs_updated", 0),
+                changes.get("programs_unchanged", 0),
+            )
+        else:
+            logger.warning("load: Programs skipped (missing file=%s)", prog_path)
         # Program costs
         cost_path = cfg.processed_dir / "program_costs.csv"
         if cost_path.exists():
+            logger.info("load: Program costs start file=%s", cost_path)
             with open(cost_path, encoding="utf-8") as f:
                 # TSV-aware
                 header = f.readline()
@@ -1827,9 +1895,18 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                             prog.save(update_fields=["metadata"])
                     if progress_every and i % progress_every == 0:
                         logger.info("Loading program_costs... rows=%d created=%d updated=%d", i, changes.get("program_costs_created", 0), changes.get("program_costs_updated", 0))
+            logger.info(
+                "load: Program costs done created=%d updated=%d unchanged=%d",
+                changes.get("program_costs_created", 0),
+                changes.get("program_costs_updated", 0),
+                changes.get("program_costs_unchanged", 0),
+            )
+        else:
+            logger.warning("load: Program costs skipped (missing file=%s)", cost_path)
         # Cutoffs
         cut_path = cfg.processed_dir / "yearly_cutoffs.csv"
         if cut_path.exists():
+            logger.info("load: Yearly cutoffs start file=%s", cut_path)
             with open(cut_path, encoding="utf-8") as f:
                 sample = f.read(4096)
                 f.seek(0)
@@ -1904,6 +1981,15 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         inc("yearly_cutoffs_skipped")
                     if progress_every and i % progress_every == 0:
                         logger.info("Loading yearly_cutoffs... rows=%d created=%d updated=%d skipped=%d", i, changes.get("yearly_cutoffs_created", 0), changes.get("yearly_cutoffs_updated", 0), changes.get("yearly_cutoffs_skipped", 0))
+            logger.info(
+                "load: Yearly cutoffs done created=%d updated=%d unchanged=%d skipped=%d",
+                changes.get("yearly_cutoffs_created", 0),
+                changes.get("yearly_cutoffs_updated", 0),
+                changes.get("yearly_cutoffs_unchanged", 0),
+                changes.get("yearly_cutoffs_skipped", 0),
+            )
+        else:
+            logger.warning("load: Yearly cutoffs skipped (missing file=%s)", cut_path)
         # Normalization rules
         norm_path = cfg.processed_dir / "normalization_rules.csv"
         if norm_path.exists():
@@ -2095,7 +2181,13 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
             logger.exception("Failed loading ClusterSubjectRule")
 
         # Optional: Normalize program requirements into JSON helper + fully relational groups/options
-        for prog in Program.objects.all().only("id", "subject_requirements"):
+        logger.info("load: Program requirements normalization start")
+        try:
+            total_programs = Program.objects.count()
+            logger.info("load: Program requirements normalization programs=%d", total_programs)
+        except Exception:
+            total_programs = 0
+        for idx, prog in enumerate(Program.objects.all().only("id", "subject_requirements"), start=1):
             try:
                 req = prog.subject_requirements or {}
                 # Store JSON snapshot
@@ -2174,6 +2266,17 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
             except Exception:
                 # Skip malformed JSON rows gracefully
                 continue
+            if progress_every and idx % progress_every == 0:
+                try:
+                    logger.info(
+                        "load: Program requirements normalization progress programs=%d/%s",
+                        idx,
+                        (total_programs or "?"),
+                    )
+                except Exception:
+                    logger.info("load: Program requirements normalization progress programs=%d", idx)
+
+        logger.info("load: Program requirements normalization done")
 
         # Aggregate change-tracking results
         return {

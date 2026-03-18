@@ -234,7 +234,11 @@ def _admin_etl_process_impl(request):
         job_state = {}
         job_pid = 0
         job_log_path = None
-    job_log_tail = _tail_text(job_log_path) if job_log_path else ""
+    try:
+        tail_lines = int((os.getenv("ETL_LOG_TAIL_LINES", "800") or "800").strip() or "800")
+    except Exception:
+        tail_lines = 800
+    job_log_tail = _tail_text(job_log_path, max_lines=tail_lines) if job_log_path else ""
 
     full_actions = [
         "extract",
