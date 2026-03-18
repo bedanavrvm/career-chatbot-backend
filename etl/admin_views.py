@@ -79,6 +79,97 @@ def _detect_reader(f) -> csv.DictReader:
         return csv.DictReader(f, delimiter="\t")
 
 
+def _summarize_tabular_file(fp: Path) -> dict:
+    info = {
+        "path": str(fp),
+        "name": fp.name,
+        "exists": fp.exists(),
+        "size_bytes": 0,
+        "mtime": "",
+        "rows": None,
+        "header": [],
+    }
+    if not fp.exists():
+        return info
+    try:
+        st = fp.stat()
+        info["size_bytes"] = int(st.st_size)
+        info["mtime"] = datetime.utcfromtimestamp(st.st_mtime).isoformat() + "Z"
+    except Exception:
+        pass
+
+    try:
+        max_bytes = int((os.getenv("ETL_OUTPUT_ROWCOUNT_MAX_BYTES", str(5 * 1024 * 1024)) or str(5 * 1024 * 1024)).strip() or str(5 * 1024 * 1024))
+    except Exception:
+        max_bytes = 5 * 1024 * 1024
+
+    ext = fp.suffix.lower()
+    if ext not in {".csv", ".tsv"}:
+        return info
+
+    if info.get("size_bytes", 0) > max_bytes:
+        return info
+
+    try:
+        with open(fp, "r", encoding="utf-8", errors="ignore", newline="") as f:
+            reader = _detect_reader(f)
+            try:
+                info["header"] = list(reader.fieldnames or [])
+            except Exception:
+                info["header"] = []
+            rows = 0
+            for _ in reader:
+                rows += 1
+            info["rows"] = rows
+    except Exception:
+        return info
+    return info
+
+
+def _etl_outputs_summary(raw_dir: Path, processed_dir: Path) -> dict:
+    raw_keys = [
+        (raw_dir / "uploads" / "").resolve(),
+    ]
+    raw_files = []
+    try:
+        uploads_dir = (raw_dir / "uploads")
+        if uploads_dir.exists():
+            pdfs = sorted(uploads_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for p in pdfs[:10]:
+                raw_files.append(_summarize_tabular_file(p))
+    except Exception:
+        pass
+
+    processed_names = [
+        "institutions.csv",
+        "fields.csv",
+        "subjects.csv",
+        "programs.csv",
+        "programs_deduped.csv",
+        "yearly_cutoffs.csv",
+        "program_costs.csv",
+        "normalization_rules.csv",
+        "program_offerings.csv",
+        "program_offerings_broad.csv",
+        "dedup_candidates.csv",
+        "dedup_summary.csv",
+        "dq_report.csv",
+        "_code_corrections.csv",
+    ]
+    processed_files = [_summarize_tabular_file(processed_dir / n) for n in processed_names]
+
+    return {
+        "raw": {
+            "dir": str(raw_dir),
+            "files": raw_files,
+        },
+        "processed": {
+            "dir": str(processed_dir),
+            "files": processed_files,
+        },
+    }
+
+
 @staff_member_required
 @ensure_csrf_cookie
 def _admin_etl_upload_impl(request):
@@ -110,6 +201,23 @@ def _admin_etl_upload_impl(request):
                 for chunk in fobj.chunks():
                     out.write(chunk)
             extracted = 0
+            extracted_paths: list[str] = []
+            expected_root_files = {
+                "institutions.csv",
+                "fields.csv",
+                "subjects.csv",
+                "programs.csv",
+                "programs_deduped.csv",
+                "yearly_cutoffs.csv",
+                "program_costs.csv",
+                "normalization_rules.csv",
+                "program_offerings.csv",
+                "program_offerings_broad.csv",
+                "dedup_candidates.csv",
+                "dedup_summary.csv",
+                "dq_report.csv",
+                "_code_corrections.csv",
+            }
             with zipfile.ZipFile(dest, "r") as zf:
                 try:
                     infos = [i for i in zf.infolist() if i and i.filename and not i.filename.endswith('/')]
@@ -139,6 +247,12 @@ def _admin_etl_upload_impl(request):
                         parts = parts[idx + 1 :]
                     if not parts:
                         continue
+
+                    # Support zips that add extra nesting inside processed/ (e.g. processed/2024/institutions.csv).
+                    # If the final filename is a known processed output, flatten it into processed/<filename>.
+                    if len(parts) >= 2 and str(parts[-1]).lower() in expected_root_files:
+                        parts = [parts[-1]]
+
                     target = (processed_dir / Path(*parts)).resolve()
                     if processed_dir.resolve() not in target.parents and target != processed_dir.resolve():
                         continue
@@ -146,8 +260,13 @@ def _admin_etl_upload_impl(request):
                     with zf.open(member, "r") as src, open(target, "wb") as dst:
                         dst.write(src.read())
                     extracted += 1
+                    try:
+                        extracted_paths.append(str(target))
+                    except Exception:
+                        pass
             ctx["stored"] = str(dest)
             ctx["extracted"] = extracted
+            ctx["extracted_paths"] = extracted_paths[-80:]
             return render(request, "admin/etl_upload.html", ctx)
 
         base.mkdir(parents=True, exist_ok=True)
@@ -604,6 +723,11 @@ def _admin_etl_process_impl(request):
             ran = True
 
         etl_stats_kv = sorted([(k, etl_stats[k]) for k in etl_stats.keys()]) if etl_stats else []
+        outputs_summary = {}
+        try:
+            outputs_summary = _etl_outputs_summary(Path(cfg.raw_dir), Path(cfg.processed_dir))
+        except Exception:
+            outputs_summary = {}
         return render(
             request,
             "admin/etl_process.html",
@@ -619,6 +743,7 @@ def _admin_etl_process_impl(request):
                 "config_value": config_path,
                 "load_summary": load_summary,
                 "etl_stats_kv": etl_stats_kv,
+                "outputs_summary": outputs_summary,
                 "job_running": job_running,
                 "job_pid": job_pid,
                 "job_log_path": str(job_log_path) if job_log_path else "",

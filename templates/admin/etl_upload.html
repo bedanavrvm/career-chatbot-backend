@@ -16,6 +16,13 @@
 {% if extracted %}
 <div style="color:#070">Extracted files: {{ extracted }}</div>
 {% endif %}
+{% if extracted_paths %}
+<div style="margin-top:8px">
+  <div><strong>Extracted paths (latest):</strong></div>
+  <pre style="max-height:220px; overflow:auto; background:#111; color:#eee; padding:8px; border-radius:4px">{% for p in extracted_paths %}{{ p }}
+{% endfor %}</pre>
+</div>
+{% endif %}
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
   <p><input type="file" name="file" accept="application/pdf,application/zip,application/x-zip-compressed,application/octet-stream,.zip" required></p>

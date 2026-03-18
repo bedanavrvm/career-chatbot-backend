@@ -34,6 +34,65 @@
 <div style="color:#070">Action ran: <b>{{ action }}</b></div>
 <div>Processed dir: <code>{{ processed_dir }}</code></div>
 {% if raw_dir %}<div>Raw dir: <code>{{ raw_dir }}</code></div>{% endif %}
+
+{% if outputs_summary %}
+<h3>Outputs</h3>
+{% if outputs_summary.raw %}
+  <div style="margin-top:6px; color:#333">Raw uploads (latest)</div>
+  <div style="font-size:12px"><code>{{ outputs_summary.raw.dir }}</code></div>
+  <table style="margin-top:6px; width:100%; border-collapse:collapse; font-size:12px">
+    <thead>
+      <tr>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">file</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">exists</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">size</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">mtime (utc)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in outputs_summary.raw.files %}
+      <tr>
+        <td style="padding:4px"><code>{{ f.name }}</code></td>
+        <td style="padding:4px">{% if f.exists %}yes{% else %}no{% endif %}</td>
+        <td style="padding:4px">{{ f.size_bytes }}</td>
+        <td style="padding:4px">{{ f.mtime }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" style="padding:4px; color:#666">No uploads found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+{% if outputs_summary.processed %}
+  <div style="margin-top:12px; color:#333">Processed outputs</div>
+  <div style="font-size:12px"><code>{{ outputs_summary.processed.dir }}</code></div>
+  <table style="margin-top:6px; width:100%; border-collapse:collapse; font-size:12px">
+    <thead>
+      <tr>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">file</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">exists</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">rows</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">size</th>
+        <th style="text-align:left; border-bottom:1px solid #444; padding:4px">mtime (utc)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in outputs_summary.processed.files %}
+      <tr>
+        <td style="padding:4px"><code>{{ f.name }}</code></td>
+        <td style="padding:4px">{% if f.exists %}yes{% else %}no{% endif %}</td>
+        <td style="padding:4px">{% if f.rows != None %}{{ f.rows }}{% else %}-{% endif %}</td>
+        <td style="padding:4px">{{ f.size_bytes }}</td>
+        <td style="padding:4px">{{ f.mtime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div style="margin-top:6px; color:#666; font-size:12px">Row counts are computed only for small files (see <code>ETL_OUTPUT_ROWCOUNT_MAX_BYTES</code>).</div>
+{% endif %}
+{% endif %}
+
 {% if etl_stats_kv %}
 <h3>Stats</h3>
 <ul>

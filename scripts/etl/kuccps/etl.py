@@ -1459,7 +1459,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
     Expected files are created by transform(). Users can replace with curated data before load().
     """
     setup_django()
-    from django.db import transaction
+    from django.db import IntegrityError, transaction
     from django.db.models import Q
     from catalog.models import (
         Institution,
@@ -1513,6 +1513,47 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
             changes[key] += 1
             if sid:
                 by_source[sid][key] += 1
+
+        def _get_or_create_field(field_name: str) -> Optional[Field]:
+            """Create or reuse a Field without crashing on slug collisions.
+
+            `Field.name` is unique and `Field.slug` is also unique. Slug collisions can happen
+            when two different names slugify to the same slug (e.g. punctuation/ampersands).
+
+            Strategy:
+            - Prefer exact name match.
+            - Else, reuse existing row with same slug.
+            - Else, create with explicit slug.
+            """
+            name = (field_name or "").strip()
+            if not name:
+                return None
+
+            existing_by_name = Field.objects.filter(name=name).first()
+            if existing_by_name:
+                return existing_by_name
+
+            slug = slugify(name)
+            if slug:
+                existing_by_slug = Field.objects.filter(slug=slug).first()
+                if existing_by_slug:
+                    if (existing_by_slug.name or "").strip() != name:
+                        logger.warning(
+                            "load: Field slug collision: requested_name='%s' slug='%s' reused_existing_name='%s'",
+                            name,
+                            slug,
+                            existing_by_slug.name,
+                        )
+                    return existing_by_slug
+
+            try:
+                # Provide slug explicitly so we can re-fetch deterministically on collision.
+                return Field.objects.create(name=name, slug=slug)
+            except IntegrityError:
+                # Another row may already exist with this slug; reuse it.
+                if slug:
+                    return Field.objects.filter(slug=slug).first()
+                return Field.objects.filter(name=name).first()
         # Institutions
         inst_path = cfg.processed_dir / "institutions.csv"
         if inst_path.exists():
@@ -1577,15 +1618,18 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                     name = row.get("name", "").strip()
                     if not name:
                         continue
-                    obj, _ = Field.objects.get_or_create(name=name)
-                    fields_cache[name] = obj
+                    obj = _get_or_create_field(name)
+                    if obj:
+                        fields_cache[name] = obj
                 f.seek(0)
                 next(f)  # skip header
                 for row in csv.DictReader(f):
                     name = row.get("name", "").strip()
                     parent_name = row.get("parent", "").strip()
                     if name and parent_name and parent_name in fields_cache:
-                        fld = fields_cache[name]
+                        fld = fields_cache.get(name)
+                        if not fld:
+                            continue
                         if fld.parent_id is None:
                             fld.parent = fields_cache[parent_name]
                             fld.save(update_fields=["parent"])
@@ -1728,7 +1772,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                         continue
                     fld = None
                     if field_name:
-                        fld, _ = Field.objects.get_or_create(name=field_name)
+                        fld = _get_or_create_field(field_name)
                     level = row.get("level", "").strip().lower() or ProgramLevel.BACHELOR
                     normalized_name = (row.get("normalized_name") or row.get("name") or "").strip()
                     if not normalized_name:
