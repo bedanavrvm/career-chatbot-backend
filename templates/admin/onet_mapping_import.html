@@ -26,6 +26,11 @@
       </div>
 
       <div class="form-row">
+        <label for="id_create_missing_fields">Create missing Fields (by slug)</label>
+        <input id="id_create_missing_fields" type="checkbox" name="create_missing_fields" {% if create_missing_fields %}checked{% endif %} />
+      </div>
+
+      <div class="form-row">
         <label for="id_replace_existing">Replace existing mappings for those fields</label>
         <input id="id_replace_existing" type="checkbox" name="replace_existing" {% if replace_existing %}checked{% endif %} />
       </div>

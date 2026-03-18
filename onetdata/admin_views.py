@@ -1261,6 +1261,7 @@ def admin_onet_mapping_suggest(request):
 def _admin_onet_mapping_import_impl(request):
     defaults = {
         'replace_existing': False,
+        'create_missing_fields': False,
     }
 
     if request.method == 'GET':
@@ -1284,8 +1285,13 @@ def _admin_onet_mapping_import_impl(request):
 
     try:
         replace_existing = str(request.POST.get('replace_existing') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+        create_missing_fields = str(request.POST.get('create_missing_fields') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
         if not request.FILES:
-            return render(request, 'admin/onet_mapping_import.html', {**defaults, 'error': 'No file provided', 'replace_existing': replace_existing})
+            return render(
+                request,
+                'admin/onet_mapping_import.html',
+                {**defaults, 'error': 'No file provided', 'replace_existing': replace_existing, 'create_missing_fields': create_missing_fields},
+            )
 
         fobj = next(iter(request.FILES.values()))
         data = fobj.read()
@@ -1297,7 +1303,11 @@ def _admin_onet_mapping_import_impl(request):
         import io
         r = csv.DictReader(io.StringIO(txt), skipinitialspace=True)
         if not r.fieldnames:
-            return render(request, 'admin/onet_mapping_import.html', {**defaults, 'error': 'CSV has no header', 'replace_existing': replace_existing})
+            return render(
+                request,
+                'admin/onet_mapping_import.html',
+                {**defaults, 'error': 'CSV has no header', 'replace_existing': replace_existing, 'create_missing_fields': create_missing_fields},
+            )
 
         header = [h.strip() for h in (r.fieldnames or [])]
         header_l = [h.lower() for h in header]
@@ -1308,7 +1318,12 @@ def _admin_onet_mapping_import_impl(request):
             return render(
                 request,
                 'admin/onet_mapping_import.html',
-                {**defaults, 'error': 'CSV must include field_slug and occupation_code columns', 'replace_existing': replace_existing},
+                {
+                    **defaults,
+                    'error': 'CSV must include field_slug and occupation_code columns',
+                    'replace_existing': replace_existing,
+                    'create_missing_fields': create_missing_fields,
+                },
             )
 
         weight_key = header[header_l.index('weight')] if 'weight' in header_l else None
@@ -1330,18 +1345,46 @@ def _admin_onet_mapping_import_impl(request):
             rows.append((slug, code, weight_raw, notes))
 
         if not rows:
-            return render(request, 'admin/onet_mapping_import.html', {**defaults, 'error': 'No valid rows found', 'replace_existing': replace_existing})
+            return render(
+                request,
+                'admin/onet_mapping_import.html',
+                {**defaults, 'error': 'No valid rows found', 'replace_existing': replace_existing, 'create_missing_fields': create_missing_fields},
+            )
 
         slugs = sorted({s for s, _, _, _ in rows})
         fields = {f.slug.lower(): f for f in Field.objects.filter(slug__in=slugs)}
 
         missing = [s for s in slugs if s not in fields]
         if missing:
-            return render(
-                request,
-                'admin/onet_mapping_import.html',
-                {**defaults, 'error': f"Unknown field slugs: {', '.join(missing[:50])}", 'replace_existing': replace_existing},
-            )
+            if create_missing_fields:
+                created = 0
+                for s in missing:
+                    try:
+                        # Prefer a readable default name while preserving the slug.
+                        default_name = (s or '').replace('-', ' ').strip().title() or s
+                        Field.objects.get_or_create(slug=s, defaults={'name': default_name})
+                        created += 1
+                    except Exception:
+                        continue
+                fields = {f.slug.lower(): f for f in Field.objects.filter(slug__in=slugs)}
+                missing = [s for s in slugs if s not in fields]
+
+            if missing:
+                msg = (
+                    f"Unknown field slugs: {', '.join(missing[:50])}. "
+                    "These Fields must exist in the DB before mappings can be imported. "
+                    "Either run the catalog ETL that loads Fields, or re-import with 'Create missing Fields' enabled."
+                )
+                return render(
+                    request,
+                    'admin/onet_mapping_import.html',
+                    {
+                        **defaults,
+                        'error': msg,
+                        'replace_existing': replace_existing,
+                        'create_missing_fields': create_missing_fields,
+                    },
+                )
 
         if replace_existing:
             OnetFieldOccupationMapping.objects.filter(field__slug__in=slugs).delete()
@@ -1368,7 +1411,16 @@ def _admin_onet_mapping_import_impl(request):
             obj.save()
             wrote += 1
 
-        return render(request, 'admin/onet_mapping_import.html', {**defaults, 'ok': f'Imported {wrote} mappings', 'replace_existing': replace_existing})
+        return render(
+            request,
+            'admin/onet_mapping_import.html',
+            {
+                **defaults,
+                'ok': f'Imported {wrote} mappings',
+                'replace_existing': replace_existing,
+                'create_missing_fields': create_missing_fields,
+            },
+        )
     except Exception as e:
         return render(request, 'admin/onet_mapping_import.html', {**defaults, 'error': str(e)})
 
