@@ -4,6 +4,7 @@ import subprocess
 import sys
 import csv
 import zipfile
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -125,10 +126,17 @@ def _admin_etl_upload_impl(request):
                     name = member.filename
                     if not name or name.endswith("/"):
                         continue
+                    if name.startswith("__MACOSX/"):
+                        continue
                     p = Path(name)
                     parts = list(p.parts)
-                    if parts and parts[0].lower() == "processed":
-                        parts = parts[1:]
+                    # Allow arbitrary top-level folder names.
+                    # If the ZIP contains a processed/ directory anywhere (e.g. export/processed/*.csv),
+                    # strip everything up to and including processed/.
+                    lowered = [str(x).lower() for x in parts]
+                    if "processed" in lowered:
+                        idx = lowered.index("processed")
+                        parts = parts[idx + 1 :]
                     if not parts:
                         continue
                     target = (processed_dir / Path(*parts)).resolve()
@@ -266,6 +274,32 @@ def _admin_etl_process_impl(request):
             },
         )
 
+    def _tee_subprocess_output(proc: subprocess.Popen, log_fp: Path) -> None:
+        """Write subprocess output to both the admin log file and stdout.
+
+        Render captures stdout/stderr of the web process. When we redirect the ETL subprocess
+        directly into a file, those lines never reach Render logs. This tee keeps the admin
+        UI behavior (log file tailing) while also making the same output visible in Render.
+        """
+        try:
+            with open(log_fp, "a", encoding="utf-8", errors="ignore") as logf:
+                stream = proc.stdout
+                if not stream:
+                    return
+                for line in iter(stream.readline, ""):
+                    try:
+                        logf.write(line)
+                        logf.flush()
+                    except Exception:
+                        pass
+                    try:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+        except Exception:
+            return
+
     try:
         action = (request.POST.get("action") or "transform-normalize").strip()
         config_path = (request.POST.get("config") or "").strip()
@@ -353,12 +387,16 @@ def _admin_etl_process_impl(request):
                         cmd,
                         cwd=backend_cwd,
                         env=proc_env,
-                        stdout=logf,
-                        stderr=logf,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
                         start_new_session=True,
                     )
                     logf.write(f"[{datetime.utcnow().isoformat()}Z] admin_etl: spawned pid={p.pid}\n")
                     logf.flush()
+                t = threading.Thread(target=_tee_subprocess_output, args=(p, log_fp), daemon=True)
+                t.start()
             except Exception as spawn_err:
                 msg.append(f"Failed to start ETL job: {spawn_err}")
                 return render(
