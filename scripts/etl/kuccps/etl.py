@@ -235,6 +235,29 @@ def bootstrap_csvs(cfg: Config) -> None:
     logger.info("transform: ensured template CSVs in %s", cfg.processed_dir)
 
 
+def _is_header_only_csv(path: Path, delimiter: str = ",") -> bool:
+    """Return True if file exists and has a header row but no data rows."""
+    try:
+        if not path.exists():
+            return False
+        with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
+            reader = csv.reader(f, delimiter=delimiter)
+            # Find first non-empty row as header
+            header = None
+            for row in reader:
+                if any((c or "").strip() for c in row):
+                    header = row
+                    break
+            if not header:
+                return True
+            for row in reader:
+                if any((c or "").strip() for c in row):
+                    return False
+            return True
+    except Exception:
+        return False
+
+
 # ---------------------------
 # Transform: programs tables -> processed CSVs
 # ---------------------------
@@ -1027,6 +1050,25 @@ def transform_normalize(cfg: Config) -> None:
                 return m["field_name"]
         return ""
 
+    def normalize_field_label(val: str) -> str:
+        s = _strip_quotes((val or "").strip())
+        if not s:
+            return ""
+        s = s.replace("&", " and ")
+        s = re.sub(r"\s+", " ", s).strip()
+        words = []
+        for w in s.split(" "):
+            if not w:
+                continue
+            # Preserve acronyms / initialisms.
+            if w.isupper() and len(w) <= 5:
+                words.append(w)
+                continue
+            words.append(w[:1].upper() + w[1:].lower() if w else w)
+        s2 = " ".join(words).strip()
+        s2 = re.sub(r"\s+", " ", s2).strip()
+        return s2
+
     def infer_award(level_val: str, label: str) -> str:
         lvl = (level_val or "").strip().lower()
         s = (label or "").strip().upper()
@@ -1158,9 +1200,11 @@ def transform_normalize(cfg: Config) -> None:
             base_name = (r.get("normalized_name") or r.get("name") or "").strip()
             if base_name:
                 fld = classify_field(base_name)
-                r["field_name"] = fld
+                r["field_name"] = normalize_field_label(fld)
                 if not fld:
                     unclassified.append([base_name, prog_code, "no_field_match"])
+        else:
+            r["field_name"] = normalize_field_label(r.get("field_name") or "")
 
         # county/region join with campus-level override (non-main campuses) then fallback to institution-level
         if inst_code:
@@ -1316,6 +1360,79 @@ def transform_normalize(cfg: Config) -> None:
                 r.get("source_id", "default"),
             ])
 
+    # Auto-generate fields.csv and subjects.csv from programs when those files are missing or header-only.
+    # This keeps load from skipping fields/subjects when you haven't curated those tables yet.
+    try:
+        fields_out = cfg.processed_dir / "fields.csv"
+        should_write_fields = (not fields_out.exists()) or _is_header_only_csv(fields_out, delimiter=",")
+        if should_write_fields:
+            canon_by_key: Dict[str, str] = {}
+            for r in rows:
+                lbl = normalize_field_label(r.get("field_name") or "")
+                if not lbl:
+                    continue
+                k = lbl.lower()
+                if k not in canon_by_key:
+                    canon_by_key[k] = lbl
+            uniq_fields = sorted(canon_by_key.values())
+            with open(fields_out, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(EXPECTED["fields.csv"])
+                for name in uniq_fields:
+                    w.writerow([name, "", ""])
+            logger.info("transform-normalize: wrote %s rows=%d", fields_out, len(uniq_fields))
+    except Exception as e:
+        logger.warning("transform-normalize: failed to generate fields.csv: %s", e)
+
+    try:
+        subjects_out = cfg.processed_dir / "subjects.csv"
+        should_write_subjects = (not subjects_out.exists()) or _is_header_only_csv(subjects_out, delimiter=",")
+        if should_write_subjects:
+            subj_by_code: Dict[str, Dict[str, str]] = {}
+
+            def _add_subject(code: str, name: str = "") -> None:
+                c = (code or "").strip().upper()
+                if not c:
+                    return
+                # prefer first non-empty name
+                existing = subj_by_code.get(c)
+                nm = (name or "").strip()
+                if not existing:
+                    subj_by_code[c] = {"code": c, "name": nm, "group": "", "alt_codes": ""}
+                else:
+                    if not (existing.get("name") or "").strip() and nm:
+                        existing["name"] = nm
+
+            for r in rows:
+                raw = (r.get("subject_requirements_json") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    req = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(req, dict):
+                    continue
+                for item in req.get("min_subjects", []) or []:
+                    if isinstance(item, dict):
+                        _add_subject(item.get("code") or item.get("subject_code") or "", item.get("subject") or "")
+                for g in req.get("groups", []) or []:
+                    if not isinstance(g, dict):
+                        continue
+                    for opt in g.get("options", []) or []:
+                        if isinstance(opt, dict):
+                            _add_subject(opt.get("code") or opt.get("subject_code") or "", opt.get("subject") or "")
+
+            with open(subjects_out, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(EXPECTED["subjects.csv"])
+                for code in sorted(subj_by_code.keys()):
+                    d = subj_by_code[code]
+                    w.writerow([d.get("code", ""), d.get("name", ""), d.get("group", ""), d.get("alt_codes", "")])
+            logger.info("transform-normalize: wrote %s rows=%d", subjects_out, len(subj_by_code))
+    except Exception as e:
+        logger.warning("transform-normalize: failed to generate subjects.csv: %s", e)
+
     # Write program_offerings summary (unique institutions per normalized course)
     offer_map = defaultdict(set)
     for r in rows:
@@ -1461,6 +1578,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
     setup_django()
     from django.db import IntegrityError, transaction
     from django.db.models import Q
+    from django.utils.text import slugify
     from catalog.models import (
         Institution,
         Field,
@@ -1608,6 +1726,8 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
         fields_cache = {}
         fld_path = cfg.processed_dir / "fields.csv"
         if fld_path.exists():
+            if _is_header_only_csv(fld_path, delimiter=","):
+                logger.warning("load: Fields file has header only (no data rows): %s", fld_path)
             logger.info("load: Fields start file=%s", fld_path)
             with open(fld_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
@@ -1686,6 +1806,8 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
             _load_subjects_file(canon_subj)
         subj_path = cfg.processed_dir / "subjects.csv"
         if subj_path.exists():
+            if _is_header_only_csv(subj_path, delimiter=","):
+                logger.warning("load: Subjects file has header only (no data rows): %s", subj_path)
             _load_subjects_file(subj_path)
         else:
             logger.warning("load: Subjects skipped (missing file=%s)", subj_path)
