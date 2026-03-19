@@ -1313,6 +1313,7 @@ def _admin_onet_mapping_import_impl(request):
         header_l = [h.lower() for h in header]
         try:
             fld_slug_key = header[header_l.index('field_slug')]
+            fld_name_key = header[header_l.index('field_name')] if 'field_name' in header_l else None
             occ_code_key = header[header_l.index('occupation_code')]
         except Exception:
             return render(
@@ -1333,16 +1334,17 @@ def _admin_onet_mapping_import_impl(request):
         seen = set()
         for row in r:
             slug = (row.get(fld_slug_key) or '').strip().lower()
+            fname = (row.get(fld_name_key) or '').strip() if fld_name_key else ''
             code = (row.get(occ_code_key) or '').strip()
             if not slug or not code:
                 continue
-            k = (slug, code)
+            k = (slug, fname.lower(), code)
             if k in seen:
                 continue
             seen.add(k)
             weight_raw = (row.get(weight_key) or '').strip() if weight_key else ''
             notes = (row.get(notes_key) or '').strip() if notes_key else ''
-            rows.append((slug, code, weight_raw, notes))
+            rows.append((slug, fname, code, weight_raw, notes))
 
         if not rows:
             return render(
@@ -1351,10 +1353,59 @@ def _admin_onet_mapping_import_impl(request):
                 {**defaults, 'error': 'No valid rows found', 'replace_existing': replace_existing, 'create_missing_fields': create_missing_fields},
             )
 
-        slugs = sorted({s for s, _, _, _ in rows})
-        fields = {f.slug.lower(): f for f in Field.objects.filter(slug__in=slugs)}
+        from django.utils.text import slugify
 
-        missing = [s for s in slugs if s not in fields]
+        slugs = sorted({s for s, _, _, _, _ in rows})
+        names = sorted({n for _, n, _, _, _ in rows if n})
+
+        def _slug_variants(s: str) -> set[str]:
+            raw = (s or '').strip().lower()
+            if not raw:
+                return set()
+            out = {raw}
+            out.add(raw.replace('&', 'and'))
+            out.add(raw.replace(' and ', ' '))
+            out.add(raw.replace(' and ', '-'))
+            out.add(raw.replace('--', '-'))
+            return {v.strip('-') for v in out if v}
+
+        def _name_slug_variants(n: str) -> set[str]:
+            raw = (n or '').strip()
+            if not raw:
+                return set()
+            out = {slugify(raw)}
+            out.add(slugify(raw.replace('&', 'and')))
+            out.add(slugify(raw.replace(' and ', ' ')))
+            return {v for v in out if v}
+
+        candidate_slugs = set()
+        for s in slugs:
+            candidate_slugs |= _slug_variants(s)
+        for n in names:
+            candidate_slugs |= _name_slug_variants(n)
+
+        fields_by_slug = {f.slug.lower(): f for f in Field.objects.filter(slug__in=sorted(candidate_slugs))}
+        fields_by_name = {f.name.strip().lower(): f for f in Field.objects.filter(name__in=names)}
+
+        def _resolve_field(slug: str, name: str):
+            s = (slug or '').strip().lower()
+            n = (name or '').strip()
+            if s and s in fields_by_slug:
+                return fields_by_slug[s]
+            n_l = n.strip().lower()
+            if n_l and n_l in fields_by_name:
+                return fields_by_name[n_l]
+            for cand in sorted(_slug_variants(s)):
+                f = fields_by_slug.get(cand)
+                if f:
+                    return f
+            for cand in sorted(_name_slug_variants(n)):
+                f = fields_by_slug.get(cand)
+                if f:
+                    return f
+            return None
+
+        missing = [s for s in slugs if _resolve_field(s, '') is None]
         if missing:
             if create_missing_fields:
                 created = 0
@@ -1366,8 +1417,8 @@ def _admin_onet_mapping_import_impl(request):
                         created += 1
                     except Exception:
                         continue
-                fields = {f.slug.lower(): f for f in Field.objects.filter(slug__in=slugs)}
-                missing = [s for s in slugs if s not in fields]
+                fields_by_slug = {f.slug.lower(): f for f in Field.objects.filter(slug__in=sorted(candidate_slugs | set(slugs)))}
+                missing = [s for s in slugs if _resolve_field(s, '') is None]
 
             if missing:
                 msg = (
@@ -1387,11 +1438,13 @@ def _admin_onet_mapping_import_impl(request):
                 )
 
         if replace_existing:
-            OnetFieldOccupationMapping.objects.filter(field__slug__in=slugs).delete()
+            resolved_field_ids = sorted({f.id for s, n, _, _, _ in rows for f in [(_resolve_field(s, n))] if f is not None})
+            if resolved_field_ids:
+                OnetFieldOccupationMapping.objects.filter(field_id__in=resolved_field_ids).delete()
 
         wrote = 0
-        for slug, code, weight_raw, notes in rows:
-            fld = fields.get(slug)
+        for slug, fname, code, weight_raw, notes in rows:
+            fld = _resolve_field(slug, fname)
             if not fld:
                 continue
             weight = None

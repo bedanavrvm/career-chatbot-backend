@@ -1054,7 +1054,12 @@ def transform_normalize(cfg: Config) -> None:
         s = _strip_quotes((val or "").strip())
         if not s:
             return ""
+        # Normalize parenthetical variants (e.g. "Science (general)" -> "Science general")
+        # This improves Field.name stability so Field.slug remains deterministic for O*NET mapping.
+        s = re.sub(r"\(([^)]{1,40})\)", r" \1 ", s)
         s = s.replace("&", " and ")
+        s = s.replace("/", " ")
+        s = re.sub(r"[,:;]+", " ", s)
         s = re.sub(r"\s+", " ", s).strip()
         words = []
         for w in s.split(" "):
@@ -1606,6 +1611,7 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
     def _load() -> Dict[str, Any]:
         changes: Dict[str, int] = defaultdict(int)
         by_source: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        warned_collision_slugs: set[str] = set()
 
         try:
             progress_every = int((os.getenv("ETL_PROGRESS_EVERY", "500") or "500").strip() or "0")
@@ -1656,12 +1662,14 @@ def load_csvs(cfg: Config, dry_run: bool = False) -> Dict[str, Any]:
                 existing_by_slug = Field.objects.filter(slug=slug).first()
                 if existing_by_slug:
                     if (existing_by_slug.name or "").strip() != name:
-                        logger.warning(
-                            "load: Field slug collision: requested_name='%s' slug='%s' reused_existing_name='%s'",
-                            name,
-                            slug,
-                            existing_by_slug.name,
-                        )
+                        if slug not in warned_collision_slugs:
+                            warned_collision_slugs.add(slug)
+                            logger.warning(
+                                "load: Field slug collision: requested_name='%s' slug='%s' reused_existing_name='%s'",
+                                name,
+                                slug,
+                                existing_by_slug.name,
+                            )
                     return existing_by_slug
 
             try:

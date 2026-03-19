@@ -193,17 +193,28 @@ def _api_program_careers_impl(request, program_id: str, force_career_path: bool 
 
         occ = occs.get(code)
         if not occ:
-            continue
-        jz = job_zone_by_code.get(occ.onetsoc_code)
-        results.append({
-            'onetsoc_code': occ.onetsoc_code,
-            'title': occ.title,
-            'description': occ.description,
-            'weight': float(m.weight) if m.weight is not None else None,
-            'notes': m.notes,
-            'job_zone': jz,
-            'level': _level_from_job_zone(jz),
-        })
+            # Mapping exists but occupation data is missing (snapshot/full not imported for this code).
+            # Still return a placeholder so the frontend can show that careers are mapped.
+            results.append({
+                'onetsoc_code': code,
+                'title': '',
+                'description': '',
+                'weight': float(m.weight) if m.weight is not None else None,
+                'notes': m.notes,
+                'job_zone': None,
+                'level': None,
+            })
+        else:
+            jz = job_zone_by_code.get(occ.onetsoc_code)
+            results.append({
+                'onetsoc_code': occ.onetsoc_code,
+                'title': occ.title,
+                'description': occ.description,
+                'weight': float(m.weight) if m.weight is not None else None,
+                'notes': m.notes,
+                'job_zone': jz,
+                'level': _level_from_job_zone(jz),
+            })
 
     if career_path:
         path = {'entry': [], 'mid': [], 'senior': [], 'unknown': []}
