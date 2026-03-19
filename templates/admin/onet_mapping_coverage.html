@@ -7,6 +7,28 @@
     <p style="color: #b94a48;"><strong>Error:</strong> {{ error }}</p>
   {% endif %}
 
+  {% if repair_error %}
+    <p style="color: #b94a48;"><strong>Repair error:</strong> {{ repair_error }}</p>
+  {% endif %}
+
+  {% if repair_summary %}
+    <h3>Duplicate repair results</h3>
+    <ul>
+      <li>Groups found: <strong>{{ repair_summary.groups_found }}</strong></li>
+      <li>Groups changed: <strong>{{ repair_summary.groups_changed }}</strong></li>
+      <li>Target Fields affected: <strong>{{ repair_summary.target_fields }}</strong></li>
+      <li>Source Fields affected: <strong>{{ repair_summary.source_fields }}</strong></li>
+      <li>Rows moved: <strong>{{ repair_summary.moved_rows }}</strong></li>
+      <li>Rows deduped: <strong>{{ repair_summary.deduped_rows }}</strong></li>
+    </ul>
+  {% endif %}
+
+  <form method="post" style="margin: 12px 0 14px 0;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="repair_duplicates" />
+    <input type="submit" value="Repair duplicate Fields" class="default" onclick="return confirm('This will move O*NET mappings from duplicate/variant Fields onto the Field that has the most programs. Continue?');" />
+  </form>
+
   {% if total_fields != None %}
     <h3>Summary</h3>
     <ul>

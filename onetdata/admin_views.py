@@ -1353,6 +1353,7 @@ def _admin_onet_mapping_import_impl(request):
                 {**defaults, 'error': 'No valid rows found', 'replace_existing': replace_existing, 'create_missing_fields': create_missing_fields},
             )
 
+        from django.db.models import Count
         from django.utils.text import slugify
 
         slugs = sorted({s for s, _, _, _, _ in rows})
@@ -1387,23 +1388,66 @@ def _admin_onet_mapping_import_impl(request):
         fields_by_slug = {f.slug.lower(): f for f in Field.objects.filter(slug__in=sorted(candidate_slugs))}
         fields_by_name = {f.name.strip().lower(): f for f in Field.objects.filter(name__in=names)}
 
+        # Prefer resolving mappings onto Fields that are actually used by Programs.
+        candidate_field_ids = sorted({f.id for f in fields_by_slug.values()} | {f.id for f in fields_by_name.values()})
+        program_counts_by_field_id = {
+            int(r['field_id']): int(r['c'])
+            for r in (
+                Field.objects.filter(id__in=candidate_field_ids)
+                .annotate(c=Count('programs', distinct=True))
+                .values('id', 'c')
+            )
+        }
+
         def _resolve_field(slug: str, name: str):
             s = (slug or '').strip().lower()
             n = (name or '').strip()
-            if s and s in fields_by_slug:
-                return fields_by_slug[s]
+
+            candidates = []
+
+            if s:
+                f = fields_by_slug.get(s)
+                if f:
+                    candidates.append(f)
+
             n_l = n.strip().lower()
-            if n_l and n_l in fields_by_name:
-                return fields_by_name[n_l]
+            if n_l:
+                f = fields_by_name.get(n_l)
+                if f:
+                    candidates.append(f)
+
             for cand in sorted(_slug_variants(s)):
                 f = fields_by_slug.get(cand)
                 if f:
-                    return f
+                    candidates.append(f)
+
             for cand in sorted(_name_slug_variants(n)):
                 f = fields_by_slug.get(cand)
                 if f:
-                    return f
-            return None
+                    candidates.append(f)
+
+            if not candidates:
+                return None
+
+            # De-dup while preserving order.
+            uniq = []
+            seen_ids = set()
+            for f in candidates:
+                if f.id in seen_ids:
+                    continue
+                seen_ids.add(f.id)
+                uniq.append(f)
+
+            # If any candidate has programs, prefer the one with the most.
+            best = None
+            best_prog_count = -1
+            for f in uniq:
+                pc = int(program_counts_by_field_id.get(int(f.id), 0))
+                if pc > best_prog_count:
+                    best_prog_count = pc
+                    best = f
+
+            return best
 
         missing = [s for s in slugs if _resolve_field(s, '') is None]
         if missing:
@@ -1864,6 +1908,102 @@ def _admin_onet_mapping_coverage_impl(request):
     if Field is None or Program is None or OnetFieldOccupationMapping is None:
         return render(request, 'admin/onet_mapping_coverage.html', {'error': 'Required apps/models not available'})
 
+    repair_summary = None
+    repair_error = None
+
+    if request.method == 'POST' and str(request.POST.get('action') or '').strip().lower() == 'repair_duplicates':
+        try:
+            from django.db import transaction
+            from django.utils.text import slugify
+
+            def _canon(s: str) -> str:
+                raw = (s or '').strip().lower()
+                if not raw:
+                    return ''
+                raw = raw.replace('&', 'and')
+                raw = raw.replace(' and ', ' ')
+                raw = raw.replace('_', ' ')
+                return slugify(raw)
+
+            fields = list(
+                Field.objects
+                .annotate(program_count=Count('programs', distinct=True))
+                .values('id', 'slug', 'name', 'program_count')
+            )
+
+            by_key: dict[str, list[dict]] = {}
+            for f in fields:
+                key = _canon(str(f.get('slug') or '')) or _canon(str(f.get('name') or ''))
+                if not key:
+                    continue
+                by_key.setdefault(key, []).append(f)
+
+            groups = [g for g in by_key.values() if len(g) > 1]
+
+            moved_rows = 0
+            deduped_rows = 0
+            affected_groups = 0
+            affected_target_fields = set()
+            affected_source_fields = set()
+
+            with transaction.atomic():
+                for g in groups:
+                    g_sorted = sorted(
+                        g,
+                        key=lambda x: (int(x.get('program_count') or 0), -int(x.get('id') or 0)),
+                        reverse=True,
+                    )
+                    target = g_sorted[0]
+                    sources = g_sorted[1:]
+                    target_id = int(target['id'])
+
+                    changed_this_group = False
+                    for src in sources:
+                        src_id = int(src['id'])
+                        if src_id == target_id:
+                            continue
+
+                        src_mappings = list(
+                            OnetFieldOccupationMapping.objects
+                            .filter(field_id=src_id)
+                            .values('occupation_code', 'weight', 'notes')
+                        )
+                        if not src_mappings:
+                            continue
+
+                        for m in src_mappings:
+                            code = str(m.get('occupation_code') or '').strip()
+                            if not code:
+                                continue
+                            obj, created = OnetFieldOccupationMapping.objects.get_or_create(
+                                field_id=target_id,
+                                occupation_code=code,
+                                defaults={'weight': m.get('weight'), 'notes': m.get('notes') or ''},
+                            )
+                            if created:
+                                moved_rows += 1
+                            else:
+                                deduped_rows += 1
+
+                        OnetFieldOccupationMapping.objects.filter(field_id=src_id).delete()
+                        changed_this_group = True
+                        affected_source_fields.add(src_id)
+
+                    if changed_this_group:
+                        affected_groups += 1
+                        affected_target_fields.add(target_id)
+
+            repair_summary = {
+                'groups_found': len(groups),
+                'groups_changed': affected_groups,
+                'target_fields': len(affected_target_fields),
+                'source_fields': len(affected_source_fields),
+                'moved_rows': moved_rows,
+                'deduped_rows': deduped_rows,
+            }
+        except Exception as e:
+            repair_error = str(e)
+
     total_fields = int(Field.objects.count())
     mapped_fields = int(OnetFieldOccupationMapping.objects.values('field_id').distinct().count())
     unmapped_fields = max(0, total_fields - mapped_fields)
@@ -1928,6 +2068,8 @@ def _admin_onet_mapping_coverage_impl(request):
             'program_limit': program_limit,
             'programs_no_field_rows': programs_no_field_rows,
             'programs_field_unmapped_rows': programs_field_unmapped_rows,
+            'repair_summary': repair_summary,
+            'repair_error': repair_error,
         },
     )
 
