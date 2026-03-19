@@ -1921,8 +1921,12 @@ def _admin_onet_mapping_coverage_impl(request):
                 if not raw:
                     return ''
                 raw = raw.replace('&', 'and')
+                # Normalize common variants like "arts-and-humanities" vs "arts-humanities"
+                raw = raw.replace('-and-', '-')
                 raw = raw.replace(' and ', ' ')
+                raw = re.sub(r'(^|[\s_\-])and([\s_\-]|$)', ' ', raw)
                 raw = raw.replace('_', ' ')
+                raw = re.sub(r'\s+', ' ', raw).strip()
                 return slugify(raw)
 
             fields = list(
