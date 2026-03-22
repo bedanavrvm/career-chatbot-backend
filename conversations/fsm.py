@@ -428,6 +428,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         'career_goals': career_goals,
         'region': (prefs.get('region') or '') if isinstance(prefs, dict) else '',
         'education_level': (prefs.get('education_level') or 'high_school') if isinstance(prefs, dict) else 'high_school',
+        'is_graduate': (prefs.get('education_level') in ('college_graduate', 'college_student')) if isinstance(prefs, dict) else False,
     }
 
     # ── Detect whether the user is asking for recommendations ────────────────
