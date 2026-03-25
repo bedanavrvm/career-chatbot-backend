@@ -80,23 +80,45 @@ def gemini_turn(
     )
 
     # ── Build grounded context block ──────────────────────────────────────────
-    grades = profile_context.get('grades') or {}
-    traits = profile_context.get('traits') or {}
-    career_goals = profile_context.get('career_goals') or []
-    region = (profile_context.get('region') or '').strip()
-    education_level = (profile_context.get('education_level') or 'high_school').strip()
+    grades = profile_context.get('grades', {})
+    traits = profile_context.get('traits', {})
+    career_goals = profile_context.get('career_goals', [])
+    region = str(profile_context.get('region', '')).strip()
+    education_level = str(profile_context.get('education_level', 'high_school')).strip()
 
     ctx_parts: List[str] = ['--- USER PROFILE ---']
     if grades:
-        grade_str = ', '.join(f"{k}: {v}" for k, v in list(grades.items())[:15])
+        # Avoid indexing into list view items directly if the linter is being stubborn
+        grade_parts = []
+        count = 0
+        for k, v in grades.items():
+            if count >= 15: break
+            grade_parts.append(f"{k}: {v}")
+            count += 1
+        grade_str = ', '.join(grade_parts)
         ctx_parts.append(f"KCSE Grades: {grade_str}")
     else:
         ctx_parts.append("KCSE Grades: not provided yet")
+
     if career_goals:
-        ctx_parts.append(f"Career goals: {', '.join(str(g) for g in career_goals[:5])}")
+        goal_parts = []
+        count = 0
+        for g in career_goals:
+            if count >= 5: break
+            goal_parts.append(str(g))
+            count += 1
+        ctx_parts.append(f"Career goals: {', '.join(goal_parts)}")
+
     if traits:
-        top_traits = sorted(traits.items(), key=lambda kv: -float(kv[1] or 0))[:4]
-        ctx_parts.append("Interest profile (RIASEC): " + ', '.join(f"{k} ({v:.2f})" for k, v in top_traits))
+        # Sort traits by descending score
+        sorted_traits = sorted(traits.items(), key=lambda kv: -float(kv[1] or 0))
+        top_trait_parts = []
+        count = 0
+        for k, v in sorted_traits:
+            if count >= 4: break
+            top_trait_parts.append(f"{k} ({float(v):.2f})")
+            count += 1
+        ctx_parts.append("Interest profile (RIASEC): " + ', '.join(top_trait_parts))
     if region:
         ctx_parts.append(f"Preferred region: {region}")
     ctx_parts.append(f"Education level: {education_level}")
@@ -200,23 +222,43 @@ def gemini_turn_stream(
         "- Keep replies concise: 3-6 sentences for explanations, up to 8 items for lists.\n"
     )
 
-    grades = profile_context.get('grades') or {}
-    traits = profile_context.get('traits') or {}
-    career_goals = profile_context.get('career_goals') or []
-    region = (profile_context.get('region') or '').strip()
-    education_level = (profile_context.get('education_level') or 'high_school').strip()
+    grades = profile_context.get('grades', {})
+    traits = profile_context.get('traits', {})
+    career_goals = profile_context.get('career_goals', [])
+    region = str(profile_context.get('region', '')).strip()
+    education_level = str(profile_context.get('education_level', 'high_school')).strip()
 
     ctx_parts: List[str] = ['--- USER PROFILE ---']
     if grades:
-        grade_str = ', '.join(f"{k}: {v}" for k, v in list(grades.items())[:15])
+        grade_parts = []
+        count = 0
+        for k, v in grades.items():
+            if count >= 15: break
+            grade_parts.append(f"{k}: {v}")
+            count += 1
+        grade_str = ', '.join(grade_parts)
         ctx_parts.append(f"KCSE Grades: {grade_str}")
     else:
         ctx_parts.append("KCSE Grades: not provided yet")
+
     if career_goals:
-        ctx_parts.append(f"Career goals: {', '.join(str(g) for g in career_goals[:5])}")
+        goal_parts = []
+        count = 0
+        for g in career_goals:
+            if count >= 5: break
+            goal_parts.append(str(g))
+            count += 1
+        ctx_parts.append(f"Career goals: {', '.join(goal_parts)}")
+
     if traits:
-        top_traits = sorted(traits.items(), key=lambda kv: -float(kv[1] or 0))[:4]
-        ctx_parts.append("Interest profile (RIASEC): " + ', '.join(f"{k} ({v:.2f})" for k, v in top_traits))
+        sorted_traits = sorted(traits.items(), key=lambda kv: -float(kv[1] or 0))
+        top_trait_parts = []
+        count = 0
+        for k, v in sorted_traits:
+            if count >= 4: break
+            top_trait_parts.append(f"{k} ({float(v):.2f})")
+            count += 1
+        ctx_parts.append("Interest profile (RIASEC): " + ', '.join(top_trait_parts))
     if region:
         ctx_parts.append(f"Preferred region: {region}")
     ctx_parts.append(f"Education level: {education_level}")
