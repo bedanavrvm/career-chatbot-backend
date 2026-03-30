@@ -14,6 +14,7 @@ def gemini_turn(
     *,
     api_key: str,
     model_name: str = 'gemini-1.5-flash',
+    onet_careers: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Full conversational turn handled entirely by Gemini.
 
@@ -52,7 +53,7 @@ def gemini_turn(
         "interests (RIASEC traits), career goals, and location preferences.\n"
         "- Answer any question naturally: greetings, " + ("eligibility checks, " if not is_grad else "postgraduate opportunities, career shifts, ") + "comparisons, 'why?' follow-ups, "
         "clarifications, pivots to new fields — handle it all conversationally.\n"
-        "- Use the provided PROFILE and CATALOG RECOMMENDATIONS as your source of truth. "
+        "- Use the provided PROFILE, CATALOG RECOMMENDATIONS, and O*NET CAREER PATHS as your source of truth. "
         "Never invent program names, institution names, cutoff points, or grades.\n"
         "- If the catalog is empty or the user asks about a field not in RECOMMENDATIONS, "
         "acknowledge it helpfully and suggest they ask again with a more specific program name.\n"
@@ -65,12 +66,22 @@ def gemini_turn(
         "respond warmly and briefly — ask TWO SHORT questions to learn what they want: "
         "(1) what field/career interests them, and " + ("(2) whether they have KCSE grades to share.\n" if not is_grad else "(2) what their current qualification is.\n") +
         "- Do NOT mention specific program names or universities in a greeting response.\n\n"
+        "INSTITUTIONS RULE:\n"
+        "- Whenever you recommend a program that appears in the CATALOG RECOMMENDATIONS, you MUST "
+        "mention 1-3 sample institutions from the 'institutions' list in that recommendation entry.\n"
+        "- List institutions naturally as part of your sentence, e.g. 'offered at University of Nairobi, Kenyatta University, and Moi University'.\n"
+        "- Do not fabricate institutions not present in the data.\n\n"
         "PROGRAM CODE RULE:\n"
         "- Whenever you mention a specific program that appears in the CATALOG RECOMMENDATIONS, "
         "always append its program code immediately after the program name using this exact format: "
         "[CODE: 1263131]. Example: 'Bachelor of Medicine & Bachelor of Surgery (MBChB) [CODE: 1263131]'.\n"
         "- Use the program code exactly as it appears in the catalog data provided — do not guess.\n"
         "- If a program has no code in the catalog, omit the [CODE: ...] tag entirely.\n\n"
+        "CAREER PATH RULE:\n"
+        "- When the user asks about career outcomes, progression, or what they can do with a degree, "
+        "use the O*NET CAREER PATHS section below as your authoritative source.\n"
+        "- Group careers by level: Entry-level, Mid-level, Senior-level, and list the O*NET SOC code in brackets.\n"
+        "- Example: 'Entry-level: Software Developer [15-1252.00], Mid-level: Software Engineer [15-1252.01]'.\n\n"
         "Formatting rules:\n"
         "- Plain text only. No markdown, no asterisks, no bullet dash characters.\n"
         "- Use numbered lists (1. 2. 3.) for multiple items.\n"
@@ -134,28 +145,61 @@ def gemini_turn(
                 line = f"{i}. {nm} [CODE: {pcode}]"
             else:
                 line = f"{i}. {nm}"
-            
+
+            # Always list sample institutions from grouped data
             institutions = r.get('institutions', [])
             if institutions:
-                inst_list = []
+                inst_names = []
                 for inst_dict in institutions[:3]:
                     iname = (inst_dict.get('institution_name') or '').strip()
-                    code = (inst_dict.get('program_code') or '').strip()
-                    if iname and code:
-                        inst_list.append(f"{iname} [{code}]")
+                    icode = (inst_dict.get('program_code') or '').strip()
+                    if iname and icode:
+                        inst_names.append(f"{iname} [{icode}]")
                     elif iname:
-                        inst_list.append(iname)
-                if inst_list:
-                    line += f" — Offered at: {', '.join(inst_list)}"
+                        inst_names.append(iname)
+                if inst_names:
+                    line += f" — Offered at: {', '.join(inst_names)}"
                     if len(institutions) > 3:
                         line += f" (and {len(institutions) - 3} more)"
-            
+            elif r.get('institution_name'):
+                # Fallback: single institution on the record
+                inst_name = (r.get('institution_name') or '').strip()
+                inst_pcode = (r.get('program_code') or '').strip()
+                if inst_name:
+                    line += f" — {inst_name}" + (f" [{inst_pcode}]" if inst_pcode else "")
+
             if score is not None:
                 line += f" (match score: {float(score):.2f})"
             ctx_parts.append(line)
     else:
         ctx_parts.append('\n--- CATALOG RECOMMENDATIONS ---')
         ctx_parts.append('(No catalog matches yet — the user has not specified a field or grades)')
+
+    # ── O*NET Career Paths Section ──────────────────────────────────────────
+    onet_list = onet_careers or []
+    if onet_list:
+        ctx_parts.append('\n--- O*NET CAREER PATHS ---')
+        ctx_parts.append('(Real O*NET occupational data for the recommended programs. Use this for career trajectory questions.)')
+        # Group by career level
+        level_groups: Dict[str, List[str]] = {'entry': [], 'mid': [], 'senior': [], 'unknown': []}
+        for occ in onet_list[:27]:
+            lvl = (occ.get('career_level') or 'unknown').strip().lower()
+            if lvl not in level_groups:
+                lvl = 'unknown'
+            soc = (occ.get('onetsoc_code') or '').strip()
+            title = (occ.get('title') or '').strip()
+            field = (occ.get('field') or '').strip()
+            if title and soc:
+                level_groups[lvl].append(f"{title} [{soc}]" + (f" ({field})" if field else ""))
+            elif title:
+                level_groups[lvl].append(title + (f" ({field})" if field else ""))
+        for lvl_key, lvl_label in [('entry', 'Entry-level'), ('mid', 'Mid-level'), ('senior', 'Senior-level'), ('unknown', 'General roles')]:
+            items = level_groups.get(lvl_key, [])
+            if items:
+                ctx_parts.append(f"{lvl_label}: {', '.join(items[:5])}")
+    else:
+        ctx_parts.append('\n--- O*NET CAREER PATHS ---')
+        ctx_parts.append('(Not available for this query — ask for a specific program to see career progression)')
 
     context_block = '\n'.join(ctx_parts)
 
@@ -191,6 +235,7 @@ def gemini_turn_stream(
     *,
     api_key: str,
     model_name: str = 'gemini-1.5-flash',
+    onet_careers: Optional[List[Dict[str, Any]]] = None,
 ):
     """Streaming version of gemini_turn. Yields text chunks as they arrive."""
     from google import genai
@@ -210,11 +255,17 @@ def gemini_turn_stream(
         "interests (RIASEC traits), career goals, and location preferences.\n"
         "- Answer any question naturally: greetings, " + ("eligibility checks, " if not is_grad else "postgraduate opportunities, career shifts, ") + "comparisons, 'why?' follow-ups, "
         "clarifications, pivots to new fields — handle it all conversationally.\n"
-        "- Use the provided PROFILE and CATALOG RECOMMENDATIONS as your source of truth. "
+        "- Use the provided PROFILE, CATALOG RECOMMENDATIONS, and O*NET CAREER PATHS as your source of truth. "
         "Never invent program names, institution names, cutoff points, or grades.\n"
         "- If the catalog is empty or the user asks about a field not in RECOMMENDATIONS, "
         "acknowledge it helpfully and suggest a more specific program name.\n"
         "- Always remember what was said in the conversation history — no loops, no repetition.\n\n"
+        "INSTITUTIONS RULE:\n"
+        "- Whenever you recommend a program from CATALOG RECOMMENDATIONS, you MUST mention 1-3 sample institutions from that program's 'institutions' list.\n"
+        "- Do not fabricate institutions not in the data.\n\n"
+        "CAREER PATH RULE:\n"
+        "- When the user asks about career outcomes or progression, use the O*NET CAREER PATHS section as your authoritative source.\n"
+        "- Group by level: Entry-level, Mid-level, Senior-level and include SOC codes in brackets.\n\n"
         "Formatting rules:\n"
         "- Plain text only. No markdown, no asterisks, no bullet dash characters.\n"
         "- Use numbered lists (1. 2. 3.) for multiple items.\n"
@@ -272,26 +323,51 @@ def gemini_turn_stream(
                 line = f"{i}. {nm} [CODE: {pcode}]"
             else:
                 line = f"{i}. {nm}"
-            
+
             institutions = r.get('institutions', [])
             if institutions:
-                inst_list = []
+                inst_names = []
                 for inst_dict in institutions[:3]:
                     iname = (inst_dict.get('institution_name') or '').strip()
-                    code = (inst_dict.get('program_code') or '').strip()
-                    if iname and code:
-                        inst_list.append(f"{iname} [{code}]")
+                    icode = (inst_dict.get('program_code') or '').strip()
+                    if iname and icode:
+                        inst_names.append(f"{iname} [{icode}]")
                     elif iname:
-                        inst_list.append(iname)
-                if inst_list:
-                    line += f" — Offered at: {', '.join(inst_list)}"
+                        inst_names.append(iname)
+                if inst_names:
+                    line += f" — Offered at: {', '.join(inst_names)}"
                     if len(institutions) > 3:
                         line += f" (and {len(institutions) - 3} more)"
-            
+            elif r.get('institution_name'):
+                inst_name = (r.get('institution_name') or '').strip()
+                if inst_name:
+                    line += f" — {inst_name}"
+
             ctx_parts.append(line)
     else:
         ctx_parts.append('\n--- CATALOG RECOMMENDATIONS ---')
         ctx_parts.append('(No catalog matches yet)')
+
+    # ── O*NET Career Paths ───────────────────────────────────────────────────
+    onet_list = onet_careers or []
+    if onet_list:
+        ctx_parts.append('\n--- O*NET CAREER PATHS ---')
+        level_groups: Dict[str, List[str]] = {'entry': [], 'mid': [], 'senior': [], 'unknown': []}
+        for occ in onet_list[:27]:
+            lvl = (occ.get('career_level') or 'unknown').strip().lower()
+            if lvl not in level_groups:
+                lvl = 'unknown'
+            soc = (occ.get('onetsoc_code') or '').strip()
+            title = (occ.get('title') or '').strip()
+            field = (occ.get('field') or '').strip()
+            if title and soc:
+                level_groups[lvl].append(f"{title} [{soc}]" + (f" ({field})" if field else ""))
+            elif title:
+                level_groups[lvl].append(title + (f" ({field})" if field else ""))
+        for lvl_key, lvl_label in [('entry', 'Entry-level'), ('mid', 'Mid-level'), ('senior', 'Senior-level'), ('unknown', 'General roles')]:
+            items = level_groups.get(lvl_key, [])
+            if items:
+                ctx_parts.append(f"{lvl_label}: {', '.join(items[:5])}")
 
     context_block = '\n'.join(ctx_parts)
     history_section = ''

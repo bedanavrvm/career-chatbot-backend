@@ -480,6 +480,70 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         except Exception as _re:
             logger.debug('_gemini_first_turn: build_recommendations failed: %s', _re)
 
+    # ── Fetch O*NET career paths for recommended program fields ───────────────
+    # These are the same occupations shown in the "Career Trajectory" panel.
+    # We inject them into Gemini's context so its career path answers
+    # match what the UI displays (entry / mid / senior roles with SOC codes).
+    onet_careers: List[Dict[str, Any]] = []
+    if recommendations:
+        try:
+            from onetdata.mapping_models import OnetFieldOccupationMapping  # type: ignore
+            from onetdata.models import OnetOccupationSnapshot  # type: ignore
+
+            # Collect unique field slugs from top recommendations
+            seen_field_slugs: set = set()
+            field_slugs: List[str] = []
+            for r in recommendations[:5]:
+                fn = (r.get('field_name') or '').strip()
+                if fn and fn.lower() not in seen_field_slugs:
+                    seen_field_slugs.add(fn.lower())
+                    field_slugs.append(fn)
+
+            if field_slugs:
+                # Look up field objects matching those names
+                try:
+                    from catalog.models import Field  # type: ignore
+                    fields_qs = Field.objects.filter(name__in=field_slugs)
+                    for field_obj in fields_qs[:3]:
+                        mappings = (
+                            OnetFieldOccupationMapping.objects
+                            .filter(field=field_obj)
+                            .order_by('-weight', 'occupation_code')[:9]
+                        )
+                        codes = [m.occupation_code for m in mappings]
+                        if not codes:
+                            continue
+                        snaps = {
+                            r['onetsoc_code']: r
+                            for r in OnetOccupationSnapshot.objects
+                            .filter(onetsoc_code__in=codes)
+                            .values('onetsoc_code', 'title', 'description', 'job_zone')
+                        }
+                        for m in mappings:
+                            code = str(m.occupation_code or '').strip()
+                            if not code:
+                                continue
+                            snap = snaps.get(code)
+                            if snap:
+                                jz = snap.get('job_zone')
+                                try:
+                                    jz_i = int(jz) if jz is not None else None
+                                except Exception:
+                                    jz_i = None
+                                level_label = 'entry' if jz_i and jz_i <= 2 else ('mid' if jz_i == 3 else ('senior' if jz_i and jz_i >= 4 else 'unknown'))
+                                onet_careers.append({
+                                    'onetsoc_code': code,
+                                    'title': snap.get('title') or '',
+                                    'description': (snap.get('description') or '')[:200],
+                                    'job_zone': jz_i,
+                                    'career_level': level_label,
+                                    'field': field_obj.name,
+                                })
+                except Exception as _fe:
+                    logger.debug('_gemini_first_turn: O*NET field career fetch failed: %s', _fe)
+        except Exception as _oe:
+            logger.debug('_gemini_first_turn: O*NET career fetch failed: %s', _oe)
+
     # ── Call Gemini ───────────────────────────────────────────────────────────
     api_key = (getattr(settings, 'GEMINI_API_KEY', '') or '').strip()
     model_name = (getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash') or 'gemini-1.5-flash').strip()
@@ -497,6 +561,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
             recommendations,
             api_key=api_key,
             model_name=model_name,
+            onet_careers=onet_careers,
         )
 
     # ── Persist updated profile state ─────────────────────────────────────────
@@ -529,6 +594,7 @@ def _gemini_first_turn(session: Session, user_text: str, history_text: str, loca
         'gemini_context': {
             'profile_context': profile_context,
             'recommendations': recommendations,
+            'onet_careers': onet_careers,
         },
         'grades': local_analysis.get('grades') or {},
         'traits': local_analysis.get('traits') or {},
