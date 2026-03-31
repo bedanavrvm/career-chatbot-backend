@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the overall system architecture for the Delphine Career Chatbot.
+This document describes the overall system architecture for SKILLSYNC.
 
 ## 1) Repositories / components
 

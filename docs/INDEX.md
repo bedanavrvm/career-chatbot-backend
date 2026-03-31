@@ -1,4 +1,4 @@
-# Delphine Career Chatbot — Documentation Index
+# SKILLSYNC — Documentation Index
 
 This folder contains the authoritative, developer-facing documentation for the **career-chatbot-backend** (Django) project.
 

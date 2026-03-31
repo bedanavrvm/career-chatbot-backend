@@ -1,6 +1,6 @@
 """
 server/celery.py
-Celery application configuration for DELPHINE.
+Celery application configuration for SKILLSYNC.
 
 Start worker:  celery -A server worker -l info
 Start beat:    celery -A server beat -l info

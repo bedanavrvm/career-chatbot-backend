@@ -166,7 +166,7 @@ elif _db_url:
 else:
     raise ImproperlyConfigured(
         'DATABASE_URL must be set (Postgres is required). '
-        'Example: postgres://postgres:password@127.0.0.1:5432/delphine'
+        'Example: postgres://postgres:password@127.0.0.1:5432/skillsync'
     )
 
 

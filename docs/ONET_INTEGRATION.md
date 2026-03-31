@@ -1,4 +1,4 @@
-# O*NET Integration (Delphine)
+# O*NET Integration (SKILLSYNC)
 
 This document describes how O*NET is integrated into this project, how career outcomes and career-path progression are produced, and how to operate the system using the Django Admin GUI.
 
