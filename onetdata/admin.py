@@ -19,77 +19,36 @@ from .models import (
 from . import mapping_admin  # noqa: F401
 
 
+# ============================================================
+# HIDDEN FROM ADMIN (internal O*NET structure — too granular)
+# ============================================================
+# The following models are O*NET internal scaffolding. They are
+# kept in code but intentionally not exposed in the admin demo.
+#
+# Hidden models:
+#   - OnetOccupationSnapshot, OnetContentElement, OnetScale,
+#     OnetTaskStatement, OnetRelatedOccupation,
+#     OnetJobZoneReference, OnetJobZone, OnetEteCategory,
+#     OnetEducationTrainingExperience
+# ============================================================
+
+
 @admin.register(OnetOccupation)
 class OnetOccupationAdmin(admin.ModelAdmin):
+    """Master list of occupations from the O*NET database — the careers the system can recommend."""
     search_fields = ('onetsoc_code', 'title')
     list_display = ('onetsoc_code', 'title')
 
 
-@admin.register(OnetOccupationSnapshot)
-class OnetOccupationSnapshotAdmin(admin.ModelAdmin):
-    search_fields = ('onetsoc_code', 'title')
-    list_display = ('onetsoc_code', 'title', 'job_zone', 'updated_at')
-    list_filter = ('job_zone',)
-
-
-@admin.register(OnetContentElement)
-class OnetContentElementAdmin(admin.ModelAdmin):
-    search_fields = ('element_id', 'element_name')
-    list_display = ('element_id', 'element_name')
-
-
-@admin.register(OnetScale)
-class OnetScaleAdmin(admin.ModelAdmin):
-    search_fields = ('scale_id', 'scale_name')
-    list_display = ('scale_id', 'scale_name')
-
-
 @admin.register(OnetInterest)
 class OnetInterestAdmin(admin.ModelAdmin):
+    """RIASEC interest scores per occupation — maps student personality types to suitable careers."""
     search_fields = ('onetsoc_code__onetsoc_code', 'element_id__element_id', 'scale_id__scale_id')
     list_display = ('onetsoc_code', 'element_id', 'scale_id', 'data_value', 'date_updated')
 
 
 @admin.register(OnetSkill)
 class OnetSkillAdmin(admin.ModelAdmin):
+    """Skills required for each occupation — used to show students what they need to develop."""
     search_fields = ('onetsoc_code__onetsoc_code', 'element_id__element_id', 'scale_id__scale_id')
     list_display = ('onetsoc_code', 'element_id', 'scale_id', 'data_value', 'date_updated')
-
-
-@admin.register(OnetTaskStatement)
-class OnetTaskStatementAdmin(admin.ModelAdmin):
-    search_fields = ('onetsoc_code__onetsoc_code', 'task')
-    list_display = ('task_id', 'onetsoc_code', 'task_type', 'date_updated')
-
-
-@admin.register(OnetRelatedOccupation)
-class OnetRelatedOccupationAdmin(admin.ModelAdmin):
-    search_fields = ('onetsoc_code__onetsoc_code', 'related_onetsoc_code__onetsoc_code', 'relatedness_tier')
-    list_display = ('onetsoc_code', 'related_onetsoc_code', 'relatedness_tier', 'related_index')
-
-
-@admin.register(OnetJobZoneReference)
-class OnetJobZoneReferenceAdmin(admin.ModelAdmin):
-    search_fields = ('job_zone', 'name')
-    list_display = ('job_zone', 'name', 'svp_range')
-
-
-@admin.register(OnetJobZone)
-class OnetJobZoneAdmin(admin.ModelAdmin):
-    search_fields = ('onetsoc_code__onetsoc_code',)
-    list_display = ('onetsoc_code', 'job_zone', 'date_updated', 'domain_source')
-    list_filter = ('job_zone',)
-
-
-@admin.register(OnetEteCategory)
-class OnetEteCategoryAdmin(admin.ModelAdmin):
-    search_fields = ('element_id__element_id', 'scale_id__scale_id')
-    list_display = ('element_id', 'scale_id', 'category')
-    list_filter = ('element_id', 'scale_id')
-
-
-@admin.register(OnetEducationTrainingExperience)
-class OnetEducationTrainingExperienceAdmin(admin.ModelAdmin):
-    search_fields = ('onetsoc_code__onetsoc_code', 'element_id__element_id', 'scale_id__scale_id')
-    list_display = ('onetsoc_code', 'element_id', 'scale_id', 'category', 'data_value', 'date_updated')
-    list_filter = ('element_id', 'scale_id')
